@@ -35,18 +35,25 @@
 // pactl set-default-sink 1
 
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Serilog;
 using Serilog.Extensions.Logging;
 using SIPSorcery.Media;
+using SIPSorcery.Net;
 using SIPSorcery.SIP.App;
+using SIPSorceryMedia.Abstractions;
+using SIPSorceryMedia.Windows;
 
 namespace demo
 {
     class Program
     {
-        private static string DESTINATION = "helloworld@sipsorcery.cloud";
+        private static string DESTINATION = "145644579005864@192.168.12.185:5069";
+        const string MUSIC_FILENAME = "music.raw";
 
         static async Task Main()
         {
@@ -54,24 +61,47 @@ namespace demo
 
             AddConsoleLogger();
 
-            var userAgent = new SIPUserAgent();
-            var portAudioEndPoint = new PortAudioEndPoint(new AudioEncoder());
-            var voipMediaSession = new VoIPMediaSession(portAudioEndPoint.ToMediaEndPoints());
-            voipMediaSession.AcceptRtpFromAny = true;
-
-            // Place the call and wait for the result.
-            bool callResult = await userAgent.Call(DESTINATION, null, null, voipMediaSession);
-            Console.WriteLine($"Call result {((callResult) ? "success" : "failure")}.");
-
-            Console.WriteLine("press any key to exit...");
-            Console.Read();
-
-            if (userAgent.IsCallActive)
+            while (1==1)
             {
-                Console.WriteLine("Hanging up.");
-                userAgent.Hangup();
+                var userAgent = new SIPUserAgent();
+                try
+                {
+                    var windowsAudio = new WindowsAudioEndPoint(new AudioEncoder());
 
-                await Task.Delay(1000);
+                    var voipMediaSession = new VoIPMediaSession(windowsAudio.ToMediaEndPoints());
+                    //voipMediaSession.SetDestination(SDPMediaTypesEnum.audio,new IPEndPoint(ip,0),new IPEndPoint(ip,0));
+                    voipMediaSession.AcceptRtpFromAny = true;
+                    windowsAudio.RestrictFormats(x => x.Codec == AudioCodecsEnum.PCMA);
+                    // Place the call and wait for the result.
+                    bool callResult = await userAgent.Call(DESTINATION, null, null, voipMediaSession);
+                    Console.WriteLine($"Call result {((callResult) ? "success" : "failure")}.");
+
+                    if (callResult)
+                    {
+                       // await windowsAudio.PauseAudio();
+                       // await voipMediaSession.AudioExtrasSource.StartAudio();
+                       // await voipMediaSession.AudioExtrasSource.SendAudioFromStream(new FileStream(MUSIC_FILENAME, FileMode.Open), AudioSamplingRatesEnum.Rate8KHz);
+                    }
+
+                    //Console.WriteLine("press any key to exit...");
+                    //Console.Read();
+                    await Task.Delay(1000);
+
+                    if (userAgent.IsCallActive)
+                    {
+                        Console.WriteLine("Hanging up.");
+                        userAgent.Hangup();
+
+                        await Task.Delay(1000);
+                    }
+                }
+                catch
+                {
+                    Console.WriteLine("Hanging up.");
+                    userAgent.Hangup();
+
+                    await Task.Delay(1000);
+                }
             }
         }
 

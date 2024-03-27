@@ -10,11 +10,18 @@ namespace ProjectCeilidh.PortAudio.Platform
 
         public T GetSymbolDelegate<T>(string name, bool throwOnError = true) where T : Delegate
         {
-            if (!_symbolTable.TryGetValue(name, out var addr)) _symbolTable[name] = addr = GetSymbolAddress(name);
+            if (!_symbolTable.TryGetValue(name, out var addr))
+            {
+                _symbolTable[name] = addr = GetSymbolAddress(name);
+            }
 
             if (addr == IntPtr.Zero)
             {
-                if (throwOnError) throw new KeyNotFoundException($"Could not find symbol \"{name}\"");
+                if (throwOnError)
+                {
+                    throw new KeyNotFoundException($"Could not find symbol \"{name}\"");
+                }
+
                 return default;
             }
 
@@ -24,7 +31,11 @@ namespace ProjectCeilidh.PortAudio.Platform
             }
             catch (MarshalDirectiveException)
             {
-                if (throwOnError) throw;
+                if (throwOnError)
+                {
+                    throw;
+                }
+
                 return default;
             }
         }

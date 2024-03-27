@@ -19,7 +19,9 @@ namespace ProjectCeilidh.PortAudio
                     var count = Native.PortAudio.Pa_GetHostApiCount();
 
                     for (PaHostApiIndex i = default; i < count; i++)
+                    {
                         yield return PortAudioInstanceCache.GetHostApi(i);
+                    }
                 }
             }
         }
@@ -40,7 +42,11 @@ namespace ProjectCeilidh.PortAudio
                 for (var i = 0; i < ApiInfo.DeviceCount; i++)
                 {
                     var deviceIndex = Native.PortAudio.Pa_HostApiDeviceIndexToDeviceIndex(_apiIndex, i);
-                    if (deviceIndex.TryGetErrorCode(out var err)) throw PortAudioException.GetException(err);
+                    if (deviceIndex.TryGetErrorCode(out var err))
+                    {
+                        throw PortAudioException.GetException(err);
+                    }
+
                     yield return PortAudioInstanceCache.GetPortAudioDevice(deviceIndex);
                 }
             }

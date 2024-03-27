@@ -90,7 +90,7 @@ namespace demo
         /// to the Echo plugin.</param>
         public async Task StartEcho(string sdpOffer)
         {
-            var pluginID = await AttachPlugin(JanusPlugins.ECHO_TEST).ConfigureAwait(false);
+            var pluginID = await AttachPlugin(JanusEchoPlugins.ECHO_TEST).ConfigureAwait(false);
 
             if (pluginID == 0)
             {

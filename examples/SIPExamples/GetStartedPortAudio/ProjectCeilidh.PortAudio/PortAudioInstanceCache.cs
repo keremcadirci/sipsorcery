@@ -14,11 +14,16 @@ namespace ProjectCeilidh.PortAudio
         
         public static PortAudioDevice GetPortAudioDevice(PaDeviceIndex index)
         {
-            if (index.TryGetErrorCode(out var err)) throw PortAudioException.GetException(err);
-            
+            if (index.TryGetErrorCode(out var err))
+            {
+                throw PortAudioException.GetException(err);
+            }
+
             if (DeviceCache.TryGetValue(index, out var reference) && reference.TryGetTarget(out var target))
+            {
                 return target;
-            
+            }
+
             var device = new PortAudioDevice(index);
             DeviceCache[index] = new WeakReference<PortAudioDevice>(device);
             return device;
@@ -26,11 +31,16 @@ namespace ProjectCeilidh.PortAudio
 
         public static PortAudioHostApi GetHostApi(PaHostApiIndex index)
         {
-            if (index.TryGetErrorCode(out var err)) throw PortAudioException.GetException(err);
-            
+            if (index.TryGetErrorCode(out var err))
+            {
+                throw PortAudioException.GetException(err);
+            }
+
             if (ApiCache.TryGetValue(index, out var reference) && reference.TryGetTarget(out var target))
+            {
                 return target;
-            
+            }
+
             var api = new PortAudioHostApi(index);
             ApiCache[index] = new WeakReference<PortAudioHostApi>(api);
             return api;

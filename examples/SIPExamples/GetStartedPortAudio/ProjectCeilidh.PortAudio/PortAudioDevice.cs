@@ -82,9 +82,13 @@ namespace ProjectCeilidh.PortAudio
             };
 
             if (asOutput)
+            {
                 outputParams = &param;
+            }
             else
+            {
                 inputParams = &param;
+            }
 
             return Native.PortAudio.Pa_IsFormatSupported(inputParams, outputParams, sampleRate) >= PaErrorCode.NoError;
         }

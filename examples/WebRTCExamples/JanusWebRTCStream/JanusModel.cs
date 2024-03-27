@@ -35,7 +35,7 @@ namespace demo
         trickle
     }
 
-    public static class JanusPlugins
+    public static class JanusEchoPlugins
     {
         public const string ECHO_TEST = "janus.plugin.echotest";
     }

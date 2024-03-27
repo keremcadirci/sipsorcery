@@ -8,7 +8,7 @@ namespace ProjectCeilidh.PortAudio.Native
     internal static class PortAudio
     {
         public static readonly NativeLibraryHandle LibraryHandle =
-            LibraryLoader.LoaderForPlatform.LoadNativeLibrary("portaudio", new Version(2, 0, 0));
+            LibraryLoader.LoaderForPlatform.LoadNativeLibrary("portaudio", new Version(0, 19, 1));
 
         /// <summary>
         /// Retrieve the release number of the currently running PortAudio build.

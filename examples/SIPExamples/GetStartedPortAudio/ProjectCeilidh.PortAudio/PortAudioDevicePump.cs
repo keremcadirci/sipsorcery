@@ -70,8 +70,15 @@ namespace ProjectCeilidh.PortAudio
         public unsafe PortAudioDevicePump(PortAudioDevice device, int channelCount, PortAudioSampleFormat sampleFormat,
             TimeSpan suggestedLatency, double sampleRate, ReadDataCallback callback)
         {
-            if (device == null) throw new ArgumentNullException(nameof(device));
-            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            if (device == null)
+            {
+                throw new ArgumentNullException(nameof(device));
+            }
+
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
             PortAudioLifetimeRegistry.Register(this);
 
@@ -95,10 +102,16 @@ namespace ProjectCeilidh.PortAudio
 
             var err = Native.PortAudio.Pa_OpenStream(out _stream, null, &outputParams, sampleRate, FRAMES_TO_BUFFER, PaStreamFlags.NoFlag,
                 StreamCallback, GCHandle.ToIntPtr(_handle));
-            if (err < PaErrorCode.NoError) throw PortAudioException.GetException(err);
+            if (err < PaErrorCode.NoError)
+            {
+                throw PortAudioException.GetException(err);
+            }
 
             err = Native.PortAudio.Pa_SetStreamFinishedCallback(_stream, StreamFinishedCallback);
-            if (err < PaErrorCode.NoError) throw PortAudioException.GetException(err);
+            if (err < PaErrorCode.NoError)
+            {
+                throw PortAudioException.GetException(err);
+            }
 
             _dataQueue = new ConcurrentQueue<BufferContainer>();
             _bufferPool = new ConcurrentBag<BufferContainer>();
@@ -152,8 +165,15 @@ namespace ProjectCeilidh.PortAudio
         public unsafe PortAudioDevicePump(PortAudioDevice device, int channelCount, PortAudioSampleFormat sampleFormat,
             TimeSpan suggestedLatency, double sampleRate, WriteDataCallback callback)
         {
-            if (device == null) throw new ArgumentNullException(nameof(device));
-            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            if (device == null)
+            {
+                throw new ArgumentNullException(nameof(device));
+            }
+
+            if (callback == null)
+            {
+                throw new ArgumentNullException(nameof(callback));
+            }
 
             PortAudioLifetimeRegistry.Register(this);
 
@@ -177,10 +197,16 @@ namespace ProjectCeilidh.PortAudio
 
             var err = Native.PortAudio.Pa_OpenStream(out _stream, &inputParams, null, sampleRate, FRAMES_TO_BUFFER, PaStreamFlags.NoFlag,
                 StreamCallback, GCHandle.ToIntPtr(_handle));
-            if (err < PaErrorCode.NoError) throw PortAudioException.GetException(err);
+            if (err < PaErrorCode.NoError)
+            {
+                throw PortAudioException.GetException(err);
+            }
 
             err = Native.PortAudio.Pa_SetStreamFinishedCallback(_stream, StreamFinishedCallback);
-            if (err < PaErrorCode.NoError) throw PortAudioException.GetException(err);
+            if (err < PaErrorCode.NoError)
+            {
+                throw PortAudioException.GetException(err);
+            }
         }
 
         /// <summary>
@@ -189,7 +215,10 @@ namespace ProjectCeilidh.PortAudio
         public void Start()
         {
             var err = Native.PortAudio.Pa_StartStream(_stream);
-            if (err < PaErrorCode.NoError) throw PortAudioException.GetException(err);
+            if (err < PaErrorCode.NoError)
+            {
+                throw PortAudioException.GetException(err);
+            }
         }
 
         /// <summary>
@@ -198,7 +227,10 @@ namespace ProjectCeilidh.PortAudio
         public void Stop()
         {
             var err = Native.PortAudio.Pa_StopStream(_stream);
-            if (err < PaErrorCode.NoError) throw PortAudioException.GetException(err);
+            if (err < PaErrorCode.NoError)
+            {
+                throw PortAudioException.GetException(err);
+            }
         }
 
         /// <summary>
@@ -207,7 +239,10 @@ namespace ProjectCeilidh.PortAudio
         public void Abort()
         {
             var err = Native.PortAudio.Pa_AbortStream(_stream);
-            if (err < PaErrorCode.NoError) throw PortAudioException.GetException(err);
+            if (err < PaErrorCode.NoError)
+            {
+                throw PortAudioException.GetException(err);
+            }
         }
 
         /// <summary>
@@ -215,7 +250,10 @@ namespace ProjectCeilidh.PortAudio
         /// </summary>
         public void ClearBuffers()
         {
-            if (Native.PortAudio.Pa_IsStreamActive(_stream) != PaErrorCode.NoError) throw new InvalidOperationException();
+            if (Native.PortAudio.Pa_IsStreamActive(_stream) != PaErrorCode.NoError)
+            {
+                throw new InvalidOperationException();
+            }
 
             _processingThreadCancel.Cancel();
             _threadEndEvent.Wait();
@@ -266,7 +304,9 @@ namespace ProjectCeilidh.PortAudio
             var offset = 0;
             var len = 0;
             while (offset < count && (len = _readDataCallback(buffer, offset, count - len)) > 0)
+            {
                 offset += len;
+            }
 
             return len;
         }
@@ -280,7 +320,10 @@ namespace ProjectCeilidh.PortAudio
         private void Dispose(bool disposing)
         {
             ReleaseUnmanagedResources();
-            if (!disposing) return;
+            if (!disposing)
+            {
+                return;
+            }
 
             _processingThreadCancel?.Cancel();
             _threadEndEvent?.Wait();
@@ -289,7 +332,10 @@ namespace ProjectCeilidh.PortAudio
             _queueCount?.Dispose();
             _poolCount?.Dispose();
 
-            if (_handle.IsAllocated) _handle.Free();
+            if (_handle.IsAllocated)
+            {
+                _handle.Free();
+            }
         }
 
         public void Dispose()
@@ -307,7 +353,10 @@ namespace ProjectCeilidh.PortAudio
         {
             var handle = GCHandle.FromIntPtr(userData);
 
-            if (!handle.IsAllocated || !(handle.Target is PortAudioDevicePump pump)) return;
+            if (!handle.IsAllocated || !(handle.Target is PortAudioDevicePump pump))
+            {
+                return;
+            }
 
             pump.StreamFinished?.Invoke(pump, EventArgs.Empty);
         }
@@ -316,7 +365,10 @@ namespace ProjectCeilidh.PortAudio
         {
             var handle = GCHandle.FromIntPtr(userData);
 
-            if (!handle.IsAllocated || !(handle.Target is PortAudioDevicePump pump)) return PaStreamCallbackResult.Abort;
+            if (!handle.IsAllocated || !(handle.Target is PortAudioDevicePump pump))
+            {
+                return PaStreamCallbackResult.Abort;
+            }
 
             if (pump._isOutput)
             {
@@ -332,10 +384,15 @@ namespace ProjectCeilidh.PortAudio
                 if (result.ReadLength < audioBufLen)
                 {
                     var audioBufPtr = (byte*) (output + result.ReadLength);
-                    if (audioBufPtr == null) return PaStreamCallbackResult.Abort; // This should never happen
+                    if (audioBufPtr == null)
+                    {
+                        return PaStreamCallbackResult.Abort; // This should never happen
+                    }
 
                     for (var i = 0; i < audioBufLen - result.ReadLength; i++)
+                    {
                         audioBufPtr[i] = 0;
+                    }
                 }
 
                 var res = result.ReadLength <= 0 ? PaStreamCallbackResult.Complete : PaStreamCallbackResult.Continue;

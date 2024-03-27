@@ -22,7 +22,10 @@ namespace ProjectCeilidh.PortAudio.Platform
 
         public NativeInt(long value)
         {
-            if (IntPtr.Size < sizeof(long) && value > int.MaxValue) throw new NotSupportedException("Creating a NativeInt from a long this large will truncate on this platform.");
+            if (IntPtr.Size < sizeof(long) && value > int.MaxValue)
+            {
+                throw new NotSupportedException("Creating a NativeInt from a long this large will truncate on this platform.");
+            }
 
             _value = new IntPtr(value);
         }
@@ -64,7 +67,10 @@ namespace ProjectCeilidh.PortAudio.Platform
 
         public NativeUInt(ulong value)
         {
-            if (IntPtr.Size < sizeof(ulong) && value > uint.MaxValue) throw new NotSupportedException("Creating a NativeUInt from a ulong this large will truncate on this platform.");
+            if (IntPtr.Size < sizeof(ulong) && value > uint.MaxValue)
+            {
+                throw new NotSupportedException("Creating a NativeUInt from a ulong this large will truncate on this platform.");
+            }
 
             _value = new UIntPtr(value);
         }

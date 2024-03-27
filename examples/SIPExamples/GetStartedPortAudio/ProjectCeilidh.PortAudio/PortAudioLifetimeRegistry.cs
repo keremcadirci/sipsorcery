@@ -19,7 +19,10 @@ namespace ProjectCeilidh.PortAudio
                     Debug.WriteLine("Initializing PortAudio...");
 
                     var err = Native.PortAudio.Pa_Initialize();
-                    if (err < PaErrorCode.NoError) throw PortAudioException.GetException(err);
+                    if (err < PaErrorCode.NoError)
+                    {
+                        throw PortAudioException.GetException(err);
+                    }
                 }
 
                 RegisteredHandles.Add(RuntimeHelpers.GetHashCode(target));
@@ -32,18 +35,27 @@ namespace ProjectCeilidh.PortAudio
         {
             lock (SyncObject)
             {
-                if (!RegisteredHandles.Remove(RuntimeHelpers.GetHashCode(target))) return;
+                if (!RegisteredHandles.Remove(RuntimeHelpers.GetHashCode(target)))
+                {
+                    return;
+                }
 
                 Debug.WriteLine($"Unregistered an object, now down to {RegisteredHandles.Count}");
 
-                if (RegisteredHandles.Count != 0) return;
+                if (RegisteredHandles.Count != 0)
+                {
+                    return;
+                }
 
                 Debug.WriteLine("Terminating PortAudio...");
 
                 PortAudioInstanceCache.ClearCache();
 
                 var err = Native.PortAudio.Pa_Terminate();
-                if (err < PaErrorCode.NoError) throw PortAudioException.GetException(err);
+                if (err < PaErrorCode.NoError)
+                {
+                    throw PortAudioException.GetException(err);
+                }
             }
         }
     }

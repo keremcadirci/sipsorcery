@@ -18,9 +18,20 @@ namespace ProjectCeilidh.PortAudio.Platform
         {
             get
             {
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return PLATFORM_WINDOWS;
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return PLATFORM_LINUX;
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return PLATFORM_OSX;
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    return PLATFORM_WINDOWS;
+                }
+
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                {
+                    return PLATFORM_LINUX;
+                }
+
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                {
+                    return PLATFORM_OSX;
+                }
 
                 throw new PlatformNotSupportedException();
             }
@@ -67,7 +78,10 @@ namespace ProjectCeilidh.PortAudio.Platform
             var handle = GetNativeLibraryNames(libraryName, version).Select(x => LoadNativeLibrary(Path.Combine(path, x)))
                 .FirstOrDefault(x => x != null);
             
-            if (handle == null) throw new DllNotFoundException($"Could not find library \"{libraryName}.{version.Major}.{version.Minor}.{version.Build}\"");
+            if (handle == null)
+            {
+                throw new DllNotFoundException($"Could not find library \"{libraryName}.{version.Major}.{version.Minor}.{version.Build}\"");
+            }
 
             return handle;
         }
