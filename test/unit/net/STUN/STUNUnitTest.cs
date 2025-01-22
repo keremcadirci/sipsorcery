@@ -130,7 +130,7 @@ namespace SIPSorcery.Net.UnitTests
 
             byte[] stunAttribute = new byte[] { 0x00, 0x01, 0xe0, 0xda, 0xe1, 0xba, 0x85, 0x3f };
 
-            STUNXORAddressAttribute xorAddressAttribute = new STUNXORAddressAttribute(STUNAttributeTypesEnum.XORMappedAddress, stunAttribute);
+            STUNXORAddressAttribute xorAddressAttribute = new STUNXORAddressAttribute(STUNAttributeTypesEnum.XORMappedAddress, stunAttribute, null);
 
             Assert.Equal(49608, xorAddressAttribute.Port);
             Assert.Equal("192.168.33.125", xorAddressAttribute.Address.ToString());
@@ -145,7 +145,7 @@ namespace SIPSorcery.Net.UnitTests
             logger.LogDebug("--> " + System.Reflection.MethodBase.GetCurrentMethod().Name);
             logger.BeginScope(System.Reflection.MethodBase.GetCurrentMethod().Name);
 
-            STUNXORAddressAttribute xorAddressAttribute = new STUNXORAddressAttribute(STUNAttributeTypesEnum.XORMappedAddress, 49608, IPAddress.Parse("192.168.33.125"));
+            STUNXORAddressAttribute xorAddressAttribute = new STUNXORAddressAttribute(STUNAttributeTypesEnum.XORMappedAddress, 49608, IPAddress.Parse("192.168.33.125"), null);
 
             byte[] buffer = new byte[12];
             xorAddressAttribute.ToByteBuffer(buffer, 0);
@@ -257,7 +257,7 @@ namespace SIPSorcery.Net.UnitTests
                 }
                 else if (attribute.AttributeType == STUNAttributeTypesEnum.XORMappedAddress)
                 {
-                    STUNXORAddressAttribute xorAddressAttribute = new STUNXORAddressAttribute(STUNAttributeTypesEnum.XORMappedAddress, attribute.Value);
+                    STUNXORAddressAttribute xorAddressAttribute = new STUNXORAddressAttribute(STUNAttributeTypesEnum.XORMappedAddress, attribute.Value, stunHeader.TransactionId);
                     logger.LogDebug(" " + attribute.AttributeType + " " + xorAddressAttribute.Address + ":" + xorAddressAttribute.Port + ".");
 
                     Assert.Equal("59.167.172.177", xorAddressAttribute.Address.ToString());
@@ -416,6 +416,24 @@ namespace SIPSorcery.Net.UnitTests
             Assert.Equal(8, stunReq.Attributes.Single(x => x.AttributeType == STUNAttributeTypesEnum.IceControlled).PaddedLength);
             Assert.Equal(0x27ff2a171b888ffeU, 
                 NetConvert.ParseUInt64(stunReq.Attributes.Single(x => x.AttributeType == STUNAttributeTypesEnum.IceControlled).Value, 0));
+        }
+
+        /// <summary>
+        /// Used as an ad-hoc way to parse STUN messages.
+        /// </summary>
+        [Fact]
+        public void ParseStunMessageUnitTest()
+        {
+            logger.LogDebug("--> " + System.Reflection.MethodBase.GetCurrentMethod().Name);
+            logger.BeginScope(System.Reflection.MethodBase.GetCurrentMethod().Name);
+
+            byte[] buffer = TypeExtensions.ParseHexStr(
+                "000100542112a4424f585055434d4e54425a4f4a00060015435242617a4d64534248616a494774433a45544d5300000000240004ff200000802a000852c0aba195cf65190025000000080014b05baf6be589d5ab202e9153547457eb1a20244c8028000464f37f6c");
+
+            STUNMessage stunRequest = STUNMessage.ParseSTUNMessage(buffer, buffer.Length);
+
+            Assert.True(stunRequest.isFingerprintValid);
+            //Assert.True(stunRequest.CheckIntegrity(System.Text.Encoding.UTF8.GetBytes(icePassword)));
         }
     }
 }

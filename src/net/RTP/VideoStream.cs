@@ -20,19 +20,18 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
-using SIPSorcery.Net;
 using SIPSorcery.Sys;
 using SIPSorceryMedia.Abstractions;
 
-namespace SIPSorcery.net.RTP
+namespace SIPSorcery.Net
 {
     public class VideoStream : MediaStream
     {
         protected static ILogger logger = Log.Logger;
-
         protected RtpVideoFramer RtpVideoFramer;
 
-        #region EVENTS
+        private SDPAudioVideoMediaFormat sendingFormat;
+        private bool sendingFormatFound = false;
 
         /// <summary>
         /// Gets fired when the remote SDP is received and the set of common video formats is set.
@@ -51,10 +50,6 @@ namespace SIPSorcery.net.RTP
         /// </remarks>
         public event Action<int, IPEndPoint, uint, byte[], VideoFormat> OnVideoFrameReceivedByIndex;
 
-        #endregion EVENTS
-
-        #region PROPERTIES
-
         /// <summary>
         /// Indicates whether this session is using video.
         /// </summary>
@@ -62,8 +57,8 @@ namespace SIPSorcery.net.RTP
         {
             get
             {
-                return LocalTrack != null && LocalTrack.StreamStatus != MediaStreamStatusEnum.Inactive
-                  && RemoteTrack != null && RemoteTrack.StreamStatus != MediaStreamStatusEnum.Inactive;
+                return (LocalTrack != null && LocalTrack.StreamStatus != MediaStreamStatusEnum.Inactive)
+                  || (RemoteTrack != null && RemoteTrack.StreamStatus != MediaStreamStatusEnum.Inactive);
             }
         }
 
@@ -72,11 +67,6 @@ namespace SIPSorcery.net.RTP
         /// process.
         /// </summary>
         public int MaxReconstructedVideoFrameSize { get; set; } = 1048576;
-
-
-        #endregion PROPERTIES
-
-        #region SEND PACKET
 
         /// <summary>
         /// Helper method to send a low quality JPEG image over RTP. This method supports a very abbreviated version of RFC 2435 "RTP Payload Format for JPEG-compressed Video".
@@ -244,12 +234,18 @@ namespace SIPSorcery.net.RTP
         /// <param name="durationRtpUnits">The duration in RTP timestamp units of the video sample. This
         /// value is added to the previous RTP timestamp when building the RTP header.</param>
         /// <param name="sample">The video sample to set as the RTP packet payload.</param>
+        ///
         public void SendVideo(uint durationRtpUnits, byte[] sample)
         {
-            var videoSendingFormat = GetSendingFormat();
-            int payloadID = Convert.ToInt32(videoSendingFormat.ID);
+            if (!sendingFormatFound)
+            {
+                sendingFormat = GetSendingFormat();
+                sendingFormatFound = true;
+            }
 
-            switch (videoSendingFormat.Name())
+            int payloadID = Convert.ToInt32(sendingFormat.ID);
+
+            switch (sendingFormat.Name())
             {
                 case "VP8":
                     SendVp8Frame(durationRtpUnits, payloadID, sample);
@@ -258,13 +254,9 @@ namespace SIPSorcery.net.RTP
                     SendH264Frame(durationRtpUnits, payloadID, sample);
                     break;
                 default:
-                    throw new ApplicationException($"Unsupported video format selected {videoSendingFormat.Name()}.");
+                    throw new ApplicationException($"Unsupported video format selected {sendingFormat.Name()}.");
             }
         }
-
-        #endregion SEND PACKET
-
-        #region RECEIVE PACKET
 
         public void ProcessVideoRtpFrame(IPEndPoint endpoint, RTPPacket packet, SDPAudioVideoMediaFormat format)
         {
@@ -303,8 +295,6 @@ namespace SIPSorcery.net.RTP
             }
         }
 
-        #endregion RECEIVE PACKET
-
         public void CheckVideoFormatsNegotiation()
         {
             if (LocalTrack != null && LocalTrack.Capabilities?.Count() > 0)
@@ -319,7 +309,7 @@ namespace SIPSorcery.net.RTP
         public VideoStream(RtpSessionConfig config, int index) : base(config, index)
         {
             MediaType = SDPMediaTypesEnum.video;
-            RemoteRtpEventPayloadID = 0;
+            NegotiatedRtpEventPayloadID = 0;
         }
     }
 }

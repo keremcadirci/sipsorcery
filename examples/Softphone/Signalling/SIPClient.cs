@@ -97,7 +97,7 @@ namespace SIPSorcery.SoftPhone
         /// <summary>
         /// Places an outgoing SIP call.
         /// </summary>
-        /// <param name="destination">The SIP URI to place a call to. The destination can be a full SIP URI in which case the all will
+        /// <param name="destination">The SIP URI to place a call to. The destination can be a full SIP URI in which case the call will
         /// be placed anonymously directly to that URI. Alternatively it can be just the user portion of a URI in which case it will
         /// be sent to the configured SIP server.</param>
         public async Task Call(string destination)
@@ -291,9 +291,6 @@ namespace SIPSorcery.SoftPhone
         /// <summary>
         /// Creates the media session to use with the SIP call.
         /// </summary>
-        /// <param name="audioSrcOpts">The audio source options to set when the call is first
-        /// answered. These options can be adjusted afterwards to do things like put play
-        /// on hold music etc.</param>
         /// <returns>A new media session object.</returns>
         private VoIPMediaSession CreateMediaSession()
         {
@@ -365,7 +362,7 @@ namespace SIPSorcery.SoftPhone
         /// <summary>
         /// An incoming call was cancelled by the caller.
         /// </summary>
-        private void IncomingCallCancelled(ISIPServerUserAgent uas)
+        private void IncomingCallCancelled(ISIPServerUserAgent uas, SIPRequest cancelRequest)
         {
             //SetText(m_signallingStatus, "incoming call cancelled for: " + uas.CallDestination + ".");
             CallFinished(null);

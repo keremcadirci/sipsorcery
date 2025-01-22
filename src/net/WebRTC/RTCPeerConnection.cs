@@ -38,11 +38,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using SIPSorcery.net.RTP;
 using Org.BouncyCastle.Crypto.Tls;
 using SIPSorcery.SIP.App;
 using SIPSorcery.Sys;
@@ -161,9 +159,7 @@ namespace SIPSorcery.Net
         private const string NORMAL_CLOSE_REASON = "normal";
         private const ushort SCTP_DEFAULT_PORT = 5000;
         private const string UNKNOWN_DATACHANNEL_ERROR = "unknown";
-        public const int RTP_HEADER_EXTENSION_ID_ABS_SEND_TIME = 2;
-        public const string RTP_HEADER_EXTENSION_URI_ABS_SEND_TIME = "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time";
-
+        
         /// <summary>
         /// The period to wait for the SCTP association to complete before giving up.
         /// In theory this should be very quick as the DTLS connection should already have been established
@@ -188,6 +184,8 @@ namespace SIPSorcery.Net
         private Org.BouncyCastle.Crypto.AsymmetricKeyParameter _dtlsPrivateKey;
         private DtlsSrtpTransport _dtlsHandle;
         private Task _iceGatheringTask;
+
+        private Dictionary<String, int> _rtpExtensionsUsed; // < Uri, Id>
 
         /// <summary>
         /// Local ICE candidates that have been supplied directly by the application.
@@ -263,6 +261,8 @@ namespace SIPSorcery.Net
         /// remote peer.
         /// </summary>
         public RTCDtlsFingerprint DtlsCertificateFingerprint { get; private set; }
+
+        public string DtlsCertificateSignatureAlgorithm { get; private set; } = string.Empty;
 
         /// <summary>
         /// The SCTP transport over which SCTP data is sent and received.
@@ -401,7 +401,7 @@ namespace SIPSorcery.Net
 
                 if (!InitializeCertificates(configuration) && !InitializeCertificates2(configuration))
                 {
-                    logger.LogWarning("No DTLS certificate is provided in the configuration");
+                    logger.LogDebug("No DTLS certificate is provided in the configuration");
                 }
 
                 if (_configuration.X_UseRtpFeedbackProfile)
@@ -417,10 +417,16 @@ namespace SIPSorcery.Net
             if (_dtlsCertificate == null)
             {
                 // No certificate was provided so create a new self signed one.
-                (_dtlsCertificate, _dtlsPrivateKey) = DtlsUtils.CreateSelfSignedTlsCert();
+                (_dtlsCertificate, _dtlsPrivateKey) = DtlsUtils.CreateSelfSignedTlsCert(useRsa: configuration?.X_UseRsaForDtlsCertificate ?? false);
             }
 
             DtlsCertificateFingerprint = DtlsUtils.Fingerprint(_dtlsCertificate);
+            DtlsCertificateSignatureAlgorithm = DtlsUtils.GetSignatureAlgorithm(_dtlsCertificate);
+
+            logger.LogDebug($"RTCPeerConnection created with DTLS certificate with fingerprint {DtlsCertificateFingerprint} and signature algorithm {DtlsCertificateSignatureAlgorithm}.");
+
+            // Save this log message to webrtc.pem and then to decode use: openssl x509 -in webrtc.pem -text -noout
+            logger.LogTrace($"-----BEGIN CERTIFICATE-----\n{DtlsUtils.ExportToDerBase64(_dtlsCertificate)}\n-----END CERTIFICATE-----");
 
             SessionID = Guid.NewGuid().ToString();
             LocalSdpSessionID = Crypto.GetRandomInt(5).ToString();
@@ -534,7 +540,7 @@ namespace SIPSorcery.Net
                         var connectedEP = _rtpIceChannel.NominatedEntry.RemoteCandidate.DestinationEndPoint;
 
                         SetGlobalDestination(connectedEP, connectedEP);
-                        logger.LogInformation($"ICE changing connected remote end point to {connectedEP}.");
+                        logger.LogDebug($"ICE changing connected remote end point to {connectedEP}.");
                     }
 
                     if (connectionState == RTCPeerConnectionState.disconnected ||
@@ -553,7 +559,7 @@ namespace SIPSorcery.Net
                     var connectedEP = _rtpIceChannel.NominatedEntry.RemoteCandidate.DestinationEndPoint;
 
                     SetGlobalDestination(connectedEP, connectedEP);
-                    logger.LogInformation($"ICE connected to remote end point {connectedEP}.");
+                    logger.LogDebug($"ICE connected to remote end point {connectedEP}.");
 
                     bool disableDtlsExtendedMasterSecret = _configuration != null && _configuration.X_DisableExtendedMasterSecretKey;
                     _dtlsHandle = new DtlsSrtpTransport(
@@ -572,7 +578,7 @@ namespace SIPSorcery.Net
                     {
                         bool handshakeResult = await Task.Run(() => DoDtlsHandshake(_dtlsHandle)).ConfigureAwait(false);
 
-                        connectionState = (handshakeResult) ? RTCPeerConnectionState.connected : connectionState = RTCPeerConnectionState.failed;
+                        connectionState = handshakeResult ? RTCPeerConnectionState.connected : connectionState = RTCPeerConnectionState.failed;
                         onconnectionstatechange?.Invoke(connectionState);
 
                         if (connectionState == RTCPeerConnectionState.connected)
@@ -641,7 +647,7 @@ namespace SIPSorcery.Net
             _configuration?.iceServers,
             _configuration != null ? _configuration.iceTransportPolicy : RTCIceTransportPolicy.all,
             _configuration != null ? _configuration.X_ICEIncludeAllInterfaceAddresses : false,
-            rtpSessionConfig.BindPort == 0 ? 0 : rtpSessionConfig.BindPort + m_rtpChannelsCount * 2 + 2,
+            rtpSessionConfig.BindPort == 0 ? 0 : rtpSessionConfig.BindPort + m_rtpChannelsCount * 2,
             rtpSessionConfig.RtpPortRange);
 
             if (rtpSessionConfig.IsMediaMultiplexed)
@@ -721,6 +727,24 @@ namespace SIPSorcery.Net
             remoteDescription = new RTCSessionDescription { type = init.type, sdp = SDP.ParseSDPDescription(init.sdp) };
 
             SDP remoteSdp = remoteDescription.sdp; // SDP.ParseSDPDescription(init.sdp);
+
+            // Need to store uri/id of know extensions
+            _rtpExtensionsUsed ??= new Dictionary<string, int>();
+            foreach (var ann in remoteSdp.Media)
+            {
+                if ( (ann.Media == SDPMediaTypesEnum.audio) || (ann.Media == SDPMediaTypesEnum.video) )
+                {
+                    var extensions = ann.HeaderExtensions?.Values;
+                    if(extensions != null)
+                    {
+                        foreach(var extension in extensions)
+                        {
+                            logger.LogDebug("[setRemoteDescription] - Extension:[{Id} - {Uri}]", extension.Id, extension.Uri);
+                            _rtpExtensionsUsed[extension.Uri] = extension.Id;
+                        }
+                    }
+                }
+            }
 
             SdpType sdpType = (init.type == RTCSdpType.offer) ? SdpType.offer : SdpType.answer;
 
@@ -820,7 +844,6 @@ namespace SIPSorcery.Net
                     }
                 }
 
-
                 ResetRemoteSDPSsrcAttributes();
                 foreach (var media in remoteSdp.Media)
                 {
@@ -834,10 +857,8 @@ namespace SIPSorcery.Net
 
                     AddRemoteSDPSsrcAttributes(media.Media, media.SsrcAttributes);
                 }
-                logger.LogDebug($"SDP:[{remoteSdp}]");
+
                 LogRemoteSDPSsrcAttributes();
-
-
 
                 UpdatedSctpDestinationPort();
 
@@ -926,18 +947,63 @@ namespace SIPSorcery.Net
             bool excludeIceCandidates = options != null && options.X_ExcludeIceCandidates;
             var offerSdp = createBaseSdp(mediaStreamList, excludeIceCandidates);
 
-            foreach (var mediaStream in offerSdp.Media)
-            {
-                // when creating offer, tell that we support abs-send-time
-                mediaStream.HeaderExtensions.Add(
-                    RTP_HEADER_EXTENSION_ID_ABS_SEND_TIME,
-                    new RTPHeaderExtension(
-                        RTP_HEADER_EXTENSION_ID_ABS_SEND_TIME, 
-                        RTP_HEADER_EXTENSION_URI_ABS_SEND_TIME));
-            }
-
+            int indexAudioStream = 0;
+            int indexVideoStream = 0;
+            _rtpExtensionsUsed ??= new Dictionary<string, int>();
             foreach (var ann in offerSdp.Media)
             {
+                // Audio - Add RTP Extension we want or can support
+                if (ann.Media == SDPMediaTypesEnum.audio)
+                {
+                    ann.HeaderExtensions.Clear();
+
+                    var localHeaderExtensions = AudioStreamList[indexAudioStream].LocalTrack?.HeaderExtensions?.Values;
+                    if (localHeaderExtensions != null)
+                    {
+                        foreach (var localExtension in localHeaderExtensions)
+                        {
+                            // We must ensure to use same Id by extension
+                            if(_rtpExtensionsUsed.ContainsKey(localExtension.Uri))
+                            {
+                                localExtension.Id = _rtpExtensionsUsed[localExtension.Uri];
+                            }
+                            else
+                            {
+                                _rtpExtensionsUsed[localExtension.Uri] = localExtension.Id;
+                            }
+
+                            logger.LogDebug("[createOffer] - {Media}:[{MediaID}] - Add HeaderExtensions:[{Id} - {Uri}]", ann.Media, ann.MediaID, localExtension.Id, localExtension.Uri);
+                            ann.HeaderExtensions[localExtension.Id] = localExtension;
+                        }
+                    }
+                    indexAudioStream++;
+                }
+                // Video - Add RTP Extension we want or can support
+                else if (ann.Media == SDPMediaTypesEnum.video)
+                {
+                    ann.HeaderExtensions.Clear();
+
+                    var localHeaderExtensions = VideoStreamList[indexVideoStream].LocalTrack?.HeaderExtensions?.Values;
+                    if (localHeaderExtensions != null)
+                    {
+                        foreach (var localExtension in localHeaderExtensions)
+                        {
+                            // We must ensure to use same Id by extension
+                            if (_rtpExtensionsUsed.ContainsKey(localExtension.Uri))
+                            {
+                                localExtension.Id = _rtpExtensionsUsed[localExtension.Uri];
+                            }
+                            else
+                            {
+                                _rtpExtensionsUsed[localExtension.Uri] = localExtension.Id;
+                            }
+
+                            logger.LogDebug("[createOffer] - {Media}:[{MediaID}] - Add HeaderExtensions:[{Id} - {Uri}]", ann.Media, ann.MediaID, localExtension.Id, localExtension.Uri);
+                            ann.HeaderExtensions[localExtension.Id] = localExtension;
+                        }
+                    }
+                    indexVideoStream++;
+                }
                 ann.IceRole = IceRole;
             }
 
@@ -1016,18 +1082,58 @@ namespace SIPSorcery.Net
                 bool excludeIceCandidates = options != null && options.X_ExcludeIceCandidates;
                 var answerSdp = createBaseSdp(mediaStreamList, excludeIceCandidates);
 
-                foreach (var media in answerSdp.Media)
+                int indexAudioStream = 0;
+                int indexVideoStream = 0;
+                _rtpExtensionsUsed ??= new Dictionary<string, int>();
+                foreach (var ann in answerSdp.Media)
                 {
-                    var remoteMedia = remoteDescription.sdp.Media.FirstOrDefault(m => m.MediaID == media.MediaID);
-                    // when creating answer, copy abs-send-time ext only if the media in offer contained it
-                    if (remoteMedia != null)
+                    // Audio - RTP Extension must be same on Local and Remote Track
+                    if (ann.Media == SDPMediaTypesEnum.audio)
                     {
-                        foreach (var kv in 
-                                 remoteMedia.HeaderExtensions.Where(kv => 
-                                     kv.Value.Uri == RTP_HEADER_EXTENSION_URI_ABS_SEND_TIME))
+                        ann.HeaderExtensions.Clear();
+
+                        var localHeaderExtensions = AudioStreamList[indexAudioStream].LocalTrack?.HeaderExtensions?.Values;
+                        var remoteHeaderExtensions = AudioStreamList[indexAudioStream].RemoteTrack?.HeaderExtensions?.Values;
+                        if ((remoteHeaderExtensions?.Count > 0) && (localHeaderExtensions?.Count > 0))
                         {
-                            media.HeaderExtensions.Add(kv.Key, kv.Value);
+                            foreach (var remoteExtension in remoteHeaderExtensions)
+                            {
+                                var localExtension = localHeaderExtensions.FirstOrDefault(ext => ext.Uri == remoteExtension.Uri);
+                                if ( (localExtension != null) && _rtpExtensionsUsed.ContainsKey(remoteExtension.Uri))
+                                {
+                                    // We must ensure to use same Id by extension
+                                    localExtension.Id = _rtpExtensionsUsed[remoteExtension.Uri];
+
+                                    logger.LogDebug("[createAnswer] - {Media}:[{MediaID}] - Add HeaderExtensions:[{Id} - {Uri}]", ann.Media, ann.MediaID, localExtension.Id, localExtension.Uri);
+                                    ann.HeaderExtensions.Add(localExtension.Id, localExtension);
+                                }
+                            }
                         }
+                        indexAudioStream++;
+                    }
+                    // Video - RTP Extension must be same on Local and Remote Track
+                    else if (ann.Media == SDPMediaTypesEnum.video)
+                    {
+                        ann.HeaderExtensions.Clear();
+
+                        var localHeaderExtensions = VideoStreamList[indexVideoStream].LocalTrack?.HeaderExtensions?.Values;
+                        var remoteHeaderExtensions = VideoStreamList[indexVideoStream].RemoteTrack?.HeaderExtensions?.Values;
+                        if ((remoteHeaderExtensions?.Count > 0) && (localHeaderExtensions?.Count > 0))
+                        {
+                            foreach (var remoteExtension in remoteHeaderExtensions)
+                            {
+                                var localExtension = localHeaderExtensions.FirstOrDefault(ext => ext.Uri == remoteExtension.Uri);
+                                if ((localExtension != null) && _rtpExtensionsUsed.ContainsKey(remoteExtension.Uri))
+                                {
+                                    // We must ensure to use same Id by extension
+                                    localExtension.Id = _rtpExtensionsUsed[remoteExtension.Uri];
+
+                                    logger.LogDebug("[createAnswer] - {Media}:[{MediaID}] - Add HeaderExtensions:[{Id} - {Uri}]", ann.Media, ann.MediaID, localExtension.Id, localExtension.Uri);
+                                    ann.HeaderExtensions.Add(localExtension.Id, localExtension);
+                                }
+                            }
+                        }
+                        indexVideoStream++;
                     }
                 }
 
@@ -1097,7 +1203,18 @@ namespace SIPSorcery.Net
             // In theory it would be better to an async/await but that would result in a breaking
             // change to the API and for a one off (once per class instance not once per method call)
             // delay of a few hundred milliseconds it was decided not to break the API.
-            _iceGatheringTask.Wait();
+            using (var ct = new CancellationTokenSource(TimeSpan.FromMilliseconds(_configuration.X_GatherTimeoutMs)))
+            {
+                try
+                {
+                    _iceGatheringTask.Wait(ct.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    logger.LogWarning($"ICE gathering timed out after {_configuration.X_GatherTimeoutMs}Ms");
+
+                }
+            }
 
             SDP offerSdp = new SDP(IPAddress.Loopback);
             offerSdp.SessionId = LocalSdpSessionID;
@@ -1105,7 +1222,6 @@ namespace SIPSorcery.Net
             string dtlsFingerprint = this.DtlsCertificateFingerprint.ToString();
             bool iceCandidatesAdded = false;
             
-
             // Local function to add ICE candidates to one of the media announcements.
             void AddIceCandidates(SDPMediaAnnouncement announcement)
             {
@@ -1303,7 +1419,7 @@ namespace SIPSorcery.Net
                 }
                 catch (Exception excp)
                 {
-                    logger.LogError($"Exception RTCPeerConnection.OnRTPDataReceived {excp.Message}");
+                    logger.LogError($"Exception RTCPeerConnection.OnRTPDataReceived {excp}");
                 }
             }
         }
@@ -1499,7 +1615,14 @@ namespace SIPSorcery.Net
                 $"priority {priority}, reliability {reliability}, label {label}, protocol {protocol}.");
 
             // TODO: Set reliability, priority etc. properties on the data channel.
-            var dc = new RTCDataChannel(sctp) { id = streamID, label = label, IsOpened = true, readyState = RTCDataChannelState.open };
+            var dc = new RTCDataChannel(sctp)
+            {
+                id = streamID,
+                label = label,
+                IsOpened = true,
+                readyState = RTCDataChannelState.open,
+                protocol = protocol
+            };
 
             dc.SendDcepAck();
 
@@ -1523,7 +1646,7 @@ namespace SIPSorcery.Net
             dataChannels.TryGetChannel(streamID, out var dc);
 
             string label = dc != null ? dc.label : "<none>";
-            logger.LogInformation($"WebRTC data channel opened label {label} and stream ID {streamID}.");
+            logger.LogDebug($"WebRTC data channel opened label {label} and stream ID {streamID}.");
 
             if (dc != null)
             {
@@ -1714,8 +1837,14 @@ namespace SIPSorcery.Net
             {
                 logger.LogDebug($"RTCPeerConnection DTLS handshake result {handshakeResult}, is handshake complete {dtlsHandle.IsHandshakeComplete()}.");
 
+                var remoteCertificate = dtlsHandle.GetRemoteCertificate().GetCertificateAt(0);
+                var remoteCertificateSignatureAlgorithm = DtlsUtils.GetSignatureAlgorithm(remoteCertificate);
+                // Save this log message to webrtc.pem and then to decode use: openssl x509 -in webrtc.pem -text -noout
+                logger.LogTrace($"Remote peer DTLS certificate, signature algorithm {remoteCertificateSignatureAlgorithm}.");
+                logger.LogTrace($"-----BEGIN CERTIFICATE-----\n{Convert.ToBase64String(remoteCertificate.GetDerEncoded())}\n-----END CERTIFICATE-----");
+
                 var expectedFp = RemotePeerDtlsFingerprint;
-                var remoteFingerprint = DtlsUtils.Fingerprint(expectedFp.algorithm, dtlsHandle.GetRemoteCertificate().GetCertificateAt(0));
+                var remoteFingerprint = DtlsUtils.Fingerprint(expectedFp.algorithm, remoteCertificate);
 
                 if (remoteFingerprint.value?.ToUpper() != expectedFp.value?.ToUpper())
                 {

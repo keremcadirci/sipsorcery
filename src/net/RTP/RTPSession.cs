@@ -1,4 +1,4 @@
-//-----------------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------------
 // Filename: RTPSession.cs
 //
 // Description: Represents an RTP session constituted of a single media stream. The session
@@ -23,11 +23,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using SIPSorcery.net.RTP;
 using SIPSorcery.SIP.App;
 using SIPSorcery.Sys;
 using SIPSorceryMedia.Abstractions;
@@ -165,7 +163,6 @@ namespace SIPSorcery.Net
         public const string RTP_SECUREMEDIA_PROFILE = "RTP/SAVP";
         protected const int SDP_SESSIONID_LENGTH = 10;             // The length of the pseudo-random string to use for the session ID.
         public const int DTMF_EVENT_DURATION = 1200;            // Default duration for a DTMF event.
-        public const int DTMF_EVENT_PAYLOAD_ID = 101;
 
         /// <summary>
         /// When there are no RTP packets being sent for an audio or video stream webrtc.lib
@@ -178,7 +175,7 @@ namespace SIPSorcery.Net
 
         protected RtpSessionConfig rtpSessionConfig;
 
-        private Boolean m_acceptRtpFromAny = false;
+        private bool m_acceptRtpFromAny = false;
         private string m_sdpSessionID = null;           // Need to maintain the same SDP session ID for all offers and answers.
         private ulong m_sdpAnnouncementVersion = 0;       // The SDP version needs to increase whenever the local SDP is modified (see https://tools.ietf.org/html/rfc6337#section-5.2.5).
         internal int m_rtpChannelsCount = 0;            // Need to know the number of RTP Channels
@@ -466,6 +463,27 @@ namespace SIPSorcery.Net
         public event Action<int, IPEndPoint, SDPMediaTypesEnum, RTPPacket> OnRtpPacketReceivedByIndex;
 
         /// <summary>
+        /// Gets fired when an RTP Header packet is received from a remote party. (on the primary one)
+        /// Parameters are:
+        ///  - Remote endpoint packet was received from,
+        ///  - The media type the packet contains, will be audio or video,
+        ///  - The RTP Header extension URI,
+        ///  - Object/Value of the header
+        /// </summary>
+        public event Action< IPEndPoint, SDPMediaTypesEnum, String, Object> OnRtpHeaderReceived;
+
+        /// <summary>
+        /// Gets fired when an RTP Header packet is received from a remote party.
+        /// Parameters are:
+        ///  - index of the AudioStream or VideoStream
+        ///  - Remote endpoint packet was received from,
+        ///  - The media type the packet contains, will be audio or video,
+        ///  - The RTP Header extension URI,
+        ///  - Object/Value of the header
+        /// </summary>
+        public event Action<int, IPEndPoint, SDPMediaTypesEnum, String, Object> OnRtpHeaderReceivedByIndex;
+
+        /// <summary>
         /// Gets fired when an RTP event is detected on the remote call party's RTP stream (on the primary one).
         /// </summary>
         public event Action<IPEndPoint, RTPEvent, RTPHeader> OnRtpEvent;
@@ -584,7 +602,6 @@ namespace SIPSorcery.Net
             }
         }
 
-
         protected void ResetRemoteSDPSsrcAttributes()
         {
             audioRemoteSDPSsrcAttributes.Clear();
@@ -635,7 +652,9 @@ namespace SIPSorcery.Net
                 mediaStream.OnSendReportByIndex += RaiseOnSendReport;
                 mediaStream.OnRtpEventByIndex += RaisedOnRtpEvent;
                 mediaStream.OnRtpPacketReceivedByIndex += RaisedOnRtpPacketReceived;
+                mediaStream.OnRtpHeaderReceivedByIndex += RaisedOnRtpHeaderReceived;
                 mediaStream.OnReceiveReportByIndex += RaisedOnOnReceiveReport;
+                mediaStream.RtcpSession.OnReportReadyToSend += SendRtcpReport;
 
                 if (mediaStream.MediaType == SDPMediaTypesEnum.audio)
                 {
@@ -685,7 +704,7 @@ namespace SIPSorcery.Net
                     }
                 }
 
-                mediaStream.RtcpSession.Close(reason);
+                mediaStream.RtcpSession?.Close(reason);
                 mediaStream.RtcpSession = null;
             }
         }
@@ -724,6 +743,15 @@ namespace SIPSorcery.Net
                 OnRtpPacketReceived?.Invoke(ipEndPoint, media, rtpPacket);
             }
             OnRtpPacketReceivedByIndex?.Invoke(index, ipEndPoint, media, rtpPacket);
+        }
+
+        private void RaisedOnRtpHeaderReceived(int index, IPEndPoint ipEndPoint, SDPMediaTypesEnum media, String uri, Object value)
+        {
+            if (index == 0)
+            {
+                OnRtpHeaderReceived?.Invoke(ipEndPoint, media, uri, value);
+            }
+            OnRtpHeaderReceivedByIndex?.Invoke(index, ipEndPoint, media, uri, value);
         }
 
         private void RaisedOnOnReceiveReport(int index, IPEndPoint ipEndPoint, SDPMediaTypesEnum media, RTCPCompoundPacket report)
@@ -1022,14 +1050,31 @@ namespace SIPSorcery.Net
                     else
                     {
                         // As proved by Azure implementation, we need to send based on capabilities of remote track. Azure return SDP with only one possible Codec (H264 107)
-                        // but we receive frames based on our LocalRemoteTracks, so its possiblet o receive a frame with ID 122, for exemple, even when remote annoucement only have 107
+                        // but we receive frames based on our LocalRemoteTracks, so it's possible to receive a frame with ID 122, for exemple, even when remote annoucement only have 107
                         // Thats why we changed line below to keep local track capabilities untouched as we can always do it during send/receive moment
                         capabilities = SDPAudioVideoMediaFormat.GetCompatibleFormats(currentMediaStream.RemoteTrack?.Capabilities, currentMediaStream.LocalTrack?.Capabilities);
-                        //Keep same order of LocalTrack priority to prevent incorrect sending format
+                        // Keep same order of LocalTrack priority to prevent incorrect sending format
                         SDPAudioVideoMediaFormat.SortMediaCapability(capabilities, currentMediaStream.LocalTrack?.Capabilities);
 
                         currentMediaStream.RemoteTrack.Capabilities = capabilities;
-                        currentMediaStream.LocalTrack.Capabilities = capabilities;
+
+                        // Adjust the local track's RTP event capability if the remote party has specified a different payload ID.
+                        var currentLocalTrackCapabilities = currentMediaStream.LocalTrack.Capabilities;
+                        SDPAudioVideoMediaFormat? localRTPEventCapabilities = null;
+                        if (currentLocalTrackCapabilities.Any(x => x.Name().ToLower() == SDP.TELEPHONE_EVENT_ATTRIBUTE))
+                        {
+                            localRTPEventCapabilities = currentLocalTrackCapabilities.First(x => x.Name().ToLower() == SDP.TELEPHONE_EVENT_ATTRIBUTE);
+                        }
+                        else
+                        {
+                            localRTPEventCapabilities = MediaStream.DefaultRTPEventFormat;
+                        }
+
+                        currentMediaStream.LocalTrack.Capabilities = capabilities.Where(x => x.Name().ToLower() != SDP.TELEPHONE_EVENT_ATTRIBUTE).ToList();
+                        if (localRTPEventCapabilities != null)
+                        {
+                            currentMediaStream.LocalTrack.Capabilities.Add(localRTPEventCapabilities.Value);
+                        }
 
                         if (currentMediaStream.MediaType == SDPMediaTypesEnum.audio)
                         {
@@ -1037,7 +1082,9 @@ namespace SIPSorcery.Net
                             SDPAudioVideoMediaFormat commonEventFormat = SDPAudioVideoMediaFormat.GetCommonRtpEventFormat(announcement.MediaFormats.Values.ToList(), currentMediaStream.LocalTrack.Capabilities);
                             if (!commonEventFormat.IsEmpty())
                             {
-                                currentMediaStream.RemoteRtpEventPayloadID = commonEventFormat.ID;
+                                currentMediaStream.NegotiatedRtpEventPayloadID = commonEventFormat.ID;
+                                currentMediaStream.LocalTrack.Capabilities.RemoveAll(x => x.Name().ToLower() == SDP.TELEPHONE_EVENT_ATTRIBUTE);
+                                currentMediaStream.LocalTrack.Capabilities.Add(commonEventFormat);
                             }
                         }
 
@@ -1700,7 +1747,6 @@ namespace SIPSorcery.Net
                     {
                         rtpPort = mediaStream.GetRTPChannel().RTPPort;
                     }
-
                 }
 
                 SDPMediaAnnouncement announcement = new SDPMediaAnnouncement(mediaStream.LocalTrack.Kind, rtpPort, mediaStream.LocalTrack.Capabilities);
@@ -1811,7 +1857,7 @@ namespace SIPSorcery.Net
             }
 
             // If RTCP is multiplexed we don't need a control socket.
-            int bindPort = (rtpSessionConfig.BindPort == 0) ? 0 : rtpSessionConfig.BindPort + m_rtpChannelsCount * 2;
+            int bindPort = (rtpSessionConfig.BindPort == 0) ? 0 : rtpSessionConfig.BindPort + m_rtpChannelsCount;
             var rtpChannel = new RTPChannel(!rtpSessionConfig.IsRtcpMultiplexed, rtpSessionConfig.BindAddress, bindPort, rtpSessionConfig.RtpPortRange);
 
 
@@ -1826,7 +1872,6 @@ namespace SIPSorcery.Net
 
             // Start the RTP, and if required the Control, socket receivers and the RTCP session.
             rtpChannel.Start();
-
 
             m_rtpChannelsCount++;
 
@@ -1883,7 +1928,6 @@ namespace SIPSorcery.Net
             {
                 IsStarted = true;
 
-
                 foreach (var audioStream in AudioStreamList)
                 {
                     if (audioStream.HasAudio && audioStream.RtcpSession != null && audioStream.LocalTrack.StreamStatus != MediaStreamStatusEnum.Inactive)
@@ -1933,7 +1977,7 @@ namespace SIPSorcery.Net
         }
 
         /// <summary>
-        /// Sends a DTMF toneas an RTP event to the remote party. (on the primary one)
+        /// Sends a DTMF tone as an RTP event to the remote party. (on the primary one)
         /// </summary>
         /// <param name="key">The DTMF tone to send.</param>
         /// <param name="ct">RTP events can span multiple RTP packets. This token can
@@ -2274,13 +2318,12 @@ namespace SIPSorcery.Net
                     return AudioStream;
                 }
             }
-            else
+            
+            if (HasVideo)
             {
-                if (HasVideo)
-                {
-                    return VideoStream;
-                }
+                return VideoStream;
             }
+            
 
             return null;
         }
@@ -2442,6 +2485,7 @@ namespace SIPSorcery.Net
                 VideoStream?.SendRtpRaw(payload, timestamp, markerBit, payloadTypeID);
             }
         }
+
         /// <summary>
         /// Allows additional control for sending raw RTCP payloads (on the primary one).
         /// </summary>

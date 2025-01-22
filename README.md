@@ -1,8 +1,21 @@
-| CI | win-x64 | linux-x64 | osx-x64 | Examples <br/> (win-x64) | Softphone <br/> (win-x64) |
-|-|-|-|-|-|-|
-| <sup>AppVeyor</sup> | [![Build status](https://ci.appveyor.com/api/projects/status/1prvhq7jyw0s5fb1/branch/master?svg=true&passingText=ok)](https://ci.appveyor.com/project/sipsorcery/sipsorcery/branch/master) | [![Build status](https://ci.appveyor.com/api/projects/status/cark9l28ovb8o886/branch/master?svg=true&passingText=ok)](https://ci.appveyor.com/project/sipsorcery/sipsorcery-5aavr/branch/master) | [![Build status](https://ci.appveyor.com/api/projects/status/7mrg69mtolwceplg/branch/master?svg=true&passingText=ok)](https://ci.appveyor.com/project/sipsorcery/sipsorcery-jyl3x/branch/master) | [![Examples build status](https://ci.appveyor.com/api/projects/status/4myf11mda0p69ysm/branch/master?svg=true&passingText=ok)](https://ci.appveyor.com/project/sipsorcery/sipsorcery-mre1o/branch/master) | [![Softphone build status](https://ci.appveyor.com/api/projects/status/xx1bcttkk4gbrd3y/branch/master?svg=true&passingText=ok)](https://ci.appveyor.com/project/sipsorcery/sipsorcery-0p6s4/branch/master) |
-| <sup>GitHub Actions</sup> | ![](https://github.com/sipsorcery-org/sipsorcery/actions/workflows/sipsorcery-core-win.yml/badge.svg) | ![](https://github.com/sipsorcery-org/sipsorcery/actions/workflows/sipsorcery-core-ubuntu.yml/badge.svg) | ![](https://github.com/sipsorcery-org/sipsorcery/actions/workflows/sipsorcery-core-mac.yml/badge.svg) | ![](https://github.com/sipsorcery-org/sipsorcery/actions/workflows/examples-core-win.yml/badge.svg) | | |
+![](https://github.com/sipsorcery-org/sipsorcery/actions/workflows/sipsorcery-core-win.yml/badge.svg) 
+![](https://github.com/sipsorcery-org/sipsorcery/actions/workflows/sipsorcery-core-ubuntu.yml/badge.svg) 
+![](https://github.com/sipsorcery-org/sipsorcery/actions/workflows/sipsorcery-core-mac.yml/badge.svg) 
+![](https://github.com/sipsorcery-org/sipsorcery/actions/workflows/examples-core-win.yml/badge.svg)
 
+## New WebRTC Demos - Jan 2025
+
+**Connect to OpenAI's Realtime WebRTC Endpoint**
+
+The [WebRTCOpenAI](https://github.com/sipsorcery-org/sipsorcery/blob/master/examples/WebRTCExamples/WebRTCOpenAI/Program.cs) demonstrates a dotnet only (no native libraries) applicaiton that connects to [OpenAI's new WebRTC Realtime](https://platform.openai.com/docs/guides/realtime-webrtc) endpoint. This demo lets you talk in realtime to ChatGPT and receive both a WebRTC audio stream response and a text transcript. Could video avatars be on the way?! A real Max Headroom!
+
+![ChatGPT WebRTC Transcript](./img/openai.png)
+
+**Use WebRTC + OpenGL for an Audio Scope**
+
+The [WebRTCOpenGL](https://github.com/sipsorcery-org/sipsorcery/blob/master/examples/WebRTCExamples/WebRTCOpenGL/Program.cs) demonstrates a way to combine digital signal processing of a WebRTC audio stream and then use OpenGL to render a video stream representation of it. It looks way better than it sounds. Try it out!
+
+![AudioScope](./img/audio-scope.png)
 
 ## What Is It?
 
@@ -55,10 +68,10 @@ Class reference documentation and articles explaining common usage are available
 The simplest possible example to place an audio-only SIP call is shown below. This example relies on the Windows specific `SIPSorceryMedia.Windows` library to play the received audio and only works on Windows (due to lack of .NET audio device support on non-Windows platforms).
 
 ````bash
-dotnet new console --name SIPGetStarted --framework net6.0 --target-framework-override net6.0-windows10.0.22000
+dotnet new console --name SIPGetStarted --framework net8.0 --target-framework-override net8.0-windows10.0.17763.0
 cd SIPGetStarted
 dotnet add package SIPSorcery
-dotnet add package SIPSorceryMedia.Windows --prerelease
+dotnet add package SIPSorceryMedia.Windows
 # Paste the code below into Program.cs.
 dotnet run
 # If successful you will hear a "Hello World" announcement.
@@ -110,7 +123,7 @@ The example relies on the Windows specific `SIPSorceryMedia.Encoders` package, w
 dotnet new console --name WebRTCGetStarted
 cd WebRTCGetStarted
 dotnet add package SIPSorcery
-dotnet add package SIPSorceryMedia.Encoders --prerelease
+dotnet add package SIPSorceryMedia.Encoders
 # Paste the code below into Program.cs.
 dotnet run
 ````

@@ -76,6 +76,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Org.BouncyCastle.Crypto.Digests;
 using SIPSorcery.Sys;
 
 [assembly: InternalsVisibleToAttribute("SIPSorcery.UnitTests")]
@@ -477,9 +478,9 @@ namespace SIPSorcery.Net
         internal List<ChecklistEntry> _checklist = new List<ChecklistEntry>();
 
         /// <summary>
-        /// Creates a copy of the checklist of local and remote candidate pairs
+        /// Lock to co-ordinate access to the _checklist.
         /// </summary>
-        internal List<ChecklistEntry> Checklist { get { return _checklist.ToList(); } }
+        private readonly object _checklistLock = new object();
 
         /// <summary>
         /// For local candidates this implementation takes a shortcut to reduce complexity. 
@@ -524,7 +525,10 @@ namespace SIPSorcery.Net
                 }
                 else
                 {
-                    return Math.Max(500, Ta * (Checklist.Count(x => x.State == ChecklistEntryState.Waiting) + Checklist.Count(x => x.State == ChecklistEntryState.InProgress)));
+                    lock (_checklistLock)
+                    {
+                        return Math.Max(500, Ta * (_checklist.Count(x => x.State == ChecklistEntryState.Waiting) + _checklist.Count(x => x.State == ChecklistEntryState.InProgress)));
+                    }
                 }
             }
         }
@@ -579,6 +583,7 @@ namespace SIPSorcery.Net
         /// If both are null system <see cref="Dns">DNS resolver</see> will be used.
         /// </remarks>
         public Func<string, Task<IPAddress>> MdnsResolve;
+
         /// <summary>
         /// An optional callback function to resolve remote ICE candidates with MDNS hostnames.
         /// </summary>
@@ -593,7 +598,6 @@ namespace SIPSorcery.Net
         protected Dictionary<STUNUri, IceTcpReceiver> m_rtpTcpReceiverByUri = new Dictionary<STUNUri, IceTcpReceiver>();
 
         private bool m_tcpRtpReceiverStarted = false;
-
 
         /// <summary>
         /// Creates a new instance of an RTP ICE channel to provide RTP channel functions 
@@ -658,17 +662,17 @@ namespace SIPSorcery.Net
 
             // Create TCP Socket to implement TURN Control
             // Take a note that TURN Control will only use TCP for CreatePermissions/Allocate/BindRequests/Data
-            // Ice Candidates returned by relay will always be UDP Based
+            // Ice Candidates returned by relay will always be UDP based.
             var tcpIceServers = _iceServers != null ?
                                     _iceServers.FindAll(a =>
                                        a != null &&
                                        (a.urls.Contains(STUNUri.SCHEME_TRANSPORT_TCP) ||
-                                       a.urls.Contains(STUNUri.SCHEME_TRANSPORT_TLS))) : 
+                                       a.urls.Contains(STUNUri.SCHEME_TRANSPORT_TLS))) :
                                     new List<RTCIceServer>();
             var supportTcp = tcpIceServers != null && tcpIceServers.Count > 0;
             if (supportTcp)
             {
-                // Init one TCP Socket per IceServer as we need to connect to proper use a TcpSocket (unfortunally)
+                // Init one TCP Socket per IceServer as we need to connect to properly use a TcpSocket (unfortunately).
                 RtpTcpSocketByUri = new Dictionary<STUNUri, Socket>();
                 foreach (var tcpIceServer in tcpIceServers)
                 {
@@ -676,7 +680,7 @@ namespace SIPSorcery.Net
                     STUNUri.TryParse(serverUrl, out STUNUri uri);
                     if (uri != null && !RtpTcpSocketByUri.ContainsKey(uri))
                     {
-                        
+
                         if (uri != null)
                         {
                             NetServices.CreateRtpSocket(false, ProtocolType.Tcp, bindAddress, bindPort, rtpPortRange, true, true, out var rtpTcpSocket, out _);
@@ -757,6 +761,7 @@ namespace SIPSorcery.Net
                 _connectivityChecksTimer = new Timer(DoConnectivityCheck, null, 0, Ta);
             }
         }
+
         protected void StartTcpRtpReceiver()
         {
             if (!m_tcpRtpReceiverStarted && RtpTcpSocketByUri != null && RtpTcpSocketByUri.Count > 0)
@@ -903,6 +908,13 @@ namespace SIPSorcery.Net
             {
                 OnIceCandidateError?.Invoke(candidate, $"Remote ICE candidate had an invalid port {candidate.port}.");
             }
+            else if(IPAddress.TryParse(candidate.address, out var addrIPv6) &&
+                    addrIPv6.AddressFamily == AddressFamily.InterNetworkV6 &&
+                    !Socket.OSSupportsIPv6 &&
+                    NetServices.HasActiveIPv6Address())
+            {
+                OnIceCandidateError?.Invoke(candidate, $"Remote ICE candidate was for IPv6 but OS does not support {candidate.address}.");
+            }
             else
             {
                 // Have a remote candidate. Connectivity checks can start. Note because we support ICE trickle
@@ -925,7 +937,10 @@ namespace SIPSorcery.Net
             _processIceServersTimer?.Dispose();
             _refreshTurnTimer?.Dispose();
             _candidates = new ConcurrentBag<RTCIceCandidate>();
-            _checklist?.Clear();
+            lock (_checklistLock)
+            {
+                _checklist?.Clear();
+            }
             _iceServerConnections?.Clear();
             IceGatheringState = RTCIceGatheringState.@new;
             IceConnectionState = RTCIceConnectionState.@new;
@@ -1108,7 +1123,6 @@ namespace SIPSorcery.Net
             }
         }
 
-        //
         private void RefreshTurn(Object state)
         {
             try
@@ -1148,7 +1162,7 @@ namespace SIPSorcery.Net
                     SendTurnCreatePermissionsRequest(NominatedEntry.RequestTransactionID, NominatedEntry.LocalCandidate.IceServer, NominatedEntry.RemoteCandidate.DestinationEndPoint);
                 }
             }
-            catch(Exception excp)
+            catch (Exception excp)
             {
                 logger.LogError($"Exception {nameof(RefreshTurn)}." + excp);
             }
@@ -1360,107 +1374,117 @@ namespace SIPSorcery.Net
         {
             if (localCandidate == null)
             {
-                throw new ArgumentNullException("localCandidate", "The local candidate must be supplied for UpdateChecklist.");
+                logger.LogError($"{nameof(UpdateChecklist)} the local candidate supplied to UpdateChecklist was null.");
+                return;
             }
             else if (remoteCandidate == null)
             {
-                throw new ArgumentNullException("remoteCandidate", "The remote candidate must be supplied for UpdateChecklist.");
+                logger.LogError($"{nameof(UpdateChecklist)} the remote candidate supplied to UpdateChecklist was null.");
+                return;
             }
 
-            // Attempt to resolve the remote candidate address.
-            if (!IPAddress.TryParse(remoteCandidate.address, out var remoteCandidateIPAddr))
+            // This methd is called in a fire and forget fashion so any exceptions need to be handled here.
+            try
             {
-                if (remoteCandidate.address.ToLower().EndsWith(MDNS_TLD))
+                // Attempt to resolve the remote candidate address.
+                if (!IPAddress.TryParse(remoteCandidate.address, out var remoteCandidateIPAddr))
                 {
-                    var addresses = await ResolveMdnsName(remoteCandidate).ConfigureAwait(false);
-                    if (addresses.Length == 0)
+                    if (remoteCandidate.address.ToLower().EndsWith(MDNS_TLD))
                     {
-                        logger.LogWarning($"RTP ICE channel MDNS resolver failed to resolve {remoteCandidate.address}.");
+                        var addresses = await ResolveMdnsName(remoteCandidate).ConfigureAwait(false);
+                        if (addresses.Length == 0)
+                        {
+                            logger.LogWarning($"RTP ICE channel MDNS resolver failed to resolve {remoteCandidate.address}.");
+                        }
+                        else
+                        {
+                            remoteCandidateIPAddr = addresses[0];
+                            logger.LogDebug($"RTP ICE channel resolved MDNS hostname {remoteCandidate.address} to {remoteCandidateIPAddr}.");
+
+                            var remoteEP = new IPEndPoint(remoteCandidateIPAddr, remoteCandidate.port);
+                            remoteCandidate.SetDestinationEndPoint(remoteEP);
+                        }
                     }
                     else
                     {
-                        remoteCandidateIPAddr = addresses[0];
-                        logger.LogDebug($"RTP ICE channel resolved MDNS hostname {remoteCandidate.address} to {remoteCandidateIPAddr}.");
+                        // The candidate string can be a hostname or an IP address.
+                        var lookupResult = await _dnsLookupClient.QueryAsync(remoteCandidate.address, DnsClient.QueryType.A).ConfigureAwait(false);
 
-                        var remoteEP = new IPEndPoint(remoteCandidateIPAddr, remoteCandidate.port);
-                        remoteCandidate.SetDestinationEndPoint(remoteEP);
+                        if (lookupResult.Answers.Count > 0)
+                        {
+                            remoteCandidateIPAddr = lookupResult.Answers.AddressRecords().FirstOrDefault()?.Address;
+                            logger.LogWarning($"RTP ICE channel resolved remote candidate {remoteCandidate.address} to {remoteCandidateIPAddr}.");
+                        }
+                        else
+                        {
+                            logger.LogDebug($"RTP ICE channel failed to resolve remote candidate {remoteCandidate.address}.");
+                        }
+
+                        if (remoteCandidateIPAddr != null)
+                        {
+                            var remoteEP = new IPEndPoint(remoteCandidateIPAddr, remoteCandidate.port);
+                            remoteCandidate.SetDestinationEndPoint(remoteEP);
+                        }
                     }
                 }
                 else
                 {
-                    // The candidate string can be a hostname or an IP address.
-                    var lookupResult = await _dnsLookupClient.QueryAsync(remoteCandidate.address, DnsClient.QueryType.A).ConfigureAwait(false);
+                    var remoteEP = new IPEndPoint(remoteCandidateIPAddr, remoteCandidate.port);
+                    remoteCandidate.SetDestinationEndPoint(remoteEP);
+                }
 
-                    if (lookupResult.Answers.Count > 0)
+                // If the remote candidate is resolvable create a new checklist entry.
+                if (remoteCandidate.DestinationEndPoint != null)
+                {
+                    bool supportsIPv4 = true;
+                    bool supportsIPv6 = false;
+
+                    if (localCandidate.type == RTCIceCandidateType.relay)
                     {
-                        remoteCandidateIPAddr = lookupResult.Answers.AddressRecords().FirstOrDefault()?.Address;
-                        logger.LogWarning($"RTP ICE channel resolved remote candidate {remoteCandidate.address} to {remoteCandidateIPAddr}.");
+                        supportsIPv4 = localCandidate.DestinationEndPoint.AddressFamily == AddressFamily.InterNetwork;
+                        supportsIPv6 = localCandidate.DestinationEndPoint.AddressFamily == AddressFamily.InterNetworkV6;
                     }
                     else
                     {
-                        logger.LogDebug($"RTP ICE channel failed to resolve remote candidate {remoteCandidate.address}.");
+                        supportsIPv4 = base.RtpSocket.AddressFamily == AddressFamily.InterNetwork || base.IsDualMode;
+                        supportsIPv6 = base.RtpSocket.AddressFamily == AddressFamily.InterNetworkV6 || base.IsDualMode;
                     }
 
-                    if (remoteCandidateIPAddr != null)
+                    lock (_checklistLock)
                     {
-                        var remoteEP = new IPEndPoint(remoteCandidateIPAddr, remoteCandidate.port);
-                        remoteCandidate.SetDestinationEndPoint(remoteEP);
+                        if (remoteCandidateIPAddr.AddressFamily == AddressFamily.InterNetwork && supportsIPv4 ||
+                            remoteCandidateIPAddr.AddressFamily == AddressFamily.InterNetworkV6 && supportsIPv6)
+                        {
+                            ChecklistEntry entry = new ChecklistEntry(localCandidate, remoteCandidate, IsController);
+
+                            // Because only ONE checklist is currently supported each candidate pair can be set to
+                            // a "waiting" state. If an additional checklist is ever added then only one candidate
+                            // pair with the same foundation should be set to waiting across all checklists.
+                            // See https://tools.ietf.org/html/rfc8445#section-6.1.2.6 for a somewhat convoluted
+                            // explanation and example.
+                            entry.State = ChecklistEntryState.Waiting;
+
+                            AddChecklistEntry(entry);
+                        }
+
+                        // Finally sort the checklist to put it in priority order and if necessary remove lower 
+                        // priority pairs.
+                        _checklist.Sort();
+
+                        while (_checklist.Count > MAX_CHECKLIST_ENTRIES)
+                        {
+                            _checklist.RemoveAt(_checklist.Count - 1);
+                        }
                     }
-                }
-            }
-            else
-            {
-                var remoteEP = new IPEndPoint(remoteCandidateIPAddr, remoteCandidate.port);
-                remoteCandidate.SetDestinationEndPoint(remoteEP);
-            }
-
-            // If the remote candidate is resolvable create a new checklist entry.
-            if (remoteCandidate.DestinationEndPoint != null)
-            {
-                bool supportsIPv4 = true;
-                bool supportsIPv6 = false;
-
-                if (localCandidate.type == RTCIceCandidateType.relay)
-                {
-                    supportsIPv4 = localCandidate.DestinationEndPoint.AddressFamily == AddressFamily.InterNetwork;
-                    supportsIPv6 = localCandidate.DestinationEndPoint.AddressFamily == AddressFamily.InterNetworkV6;
                 }
                 else
                 {
-                    supportsIPv4 = base.RtpSocket.AddressFamily == AddressFamily.InterNetwork || base.IsDualMode;
-                    supportsIPv6 = base.RtpSocket.AddressFamily == AddressFamily.InterNetworkV6 || base.IsDualMode;
-                }
-
-                lock (_checklist)
-                {
-                    if (remoteCandidateIPAddr.AddressFamily == AddressFamily.InterNetwork && supportsIPv4 ||
-                        remoteCandidateIPAddr.AddressFamily == AddressFamily.InterNetworkV6 && supportsIPv6)
-                    {
-                        ChecklistEntry entry = new ChecklistEntry(localCandidate, remoteCandidate, IsController);
-
-                        // Because only ONE checklist is currently supported each candidate pair can be set to
-                        // a "waiting" state. If an additional checklist is ever added then only one candidate
-                        // pair with the same foundation should be set to waiting across all checklists.
-                        // See https://tools.ietf.org/html/rfc8445#section-6.1.2.6 for a somewhat convoluted
-                        // explanation and example.
-                        entry.State = ChecklistEntryState.Waiting;
-
-                        AddChecklistEntry(entry);
-                    }
-
-                    // Finally sort the checklist to put it in priority order and if necessary remove lower 
-                    // priority pairs.
-                    _checklist.Sort();
-
-                    while (_checklist.Count > MAX_CHECKLIST_ENTRIES)
-                    {
-                        _checklist.RemoveAt(_checklist.Count - 1);
-                    }
+                    logger.LogWarning($"RTP ICE Channel could not create a check list entry for a remote candidate with no destination end point, {remoteCandidate}.");
                 }
             }
-            else
+            catch (Exception excp)
             {
-                logger.LogWarning($"RTP ICE Channel could not create a check list entry for a remote candidate with no destination end point, {remoteCandidate}.");
+                logger.LogError($"Exception {nameof(UpdateChecklist)}." + excp);
             }
         }
 
@@ -1481,35 +1505,38 @@ namespace SIPSorcery.Net
 
             var entryRemoteEP = entry.RemoteCandidate.DestinationEndPoint;
 
-            var existingEntry = _checklist.Where(x =>
-                x.LocalCandidate.type == entry.LocalCandidate.type
-                && x.RemoteCandidate.DestinationEndPoint != null
-                && x.RemoteCandidate.DestinationEndPoint.Address.Equals(entryRemoteEP.Address)
-                && x.RemoteCandidate.DestinationEndPoint.Port == entryRemoteEP.Port
-                && x.RemoteCandidate.protocol == entry.RemoteCandidate.protocol).SingleOrDefault();
-
-            if (existingEntry != null)
+            lock (_checklistLock)
             {
-                // Don't replace an existing checklist entry if it's already acting as the nominated entry.
-                if (!existingEntry.Nominated)
+                var existingEntry = _checklist.Where(x =>
+                    x.LocalCandidate.type == entry.LocalCandidate.type
+                    && x.RemoteCandidate.DestinationEndPoint != null
+                    && x.RemoteCandidate.DestinationEndPoint.Address.Equals(entryRemoteEP.Address)
+                    && x.RemoteCandidate.DestinationEndPoint.Port == entryRemoteEP.Port
+                    && x.RemoteCandidate.protocol == entry.RemoteCandidate.protocol).SingleOrDefault();
+
+                if (existingEntry != null)
                 {
-                    if (entry.Priority > existingEntry.Priority)
+                    // Don't replace an existing checklist entry if it's already acting as the nominated entry.
+                    if (!existingEntry.Nominated)
                     {
-                        logger.LogDebug($"Removing lower priority entry and adding candidate pair to checklist for: {entry.RemoteCandidate}");
-                        _checklist.Remove(existingEntry);
-                        _checklist.Add(entry);
-                    }
-                    else
-                    {
-                        logger.LogDebug($"Existing checklist entry has higher priority, NOT adding entry for: {entry.RemoteCandidate}");
+                        if (entry.Priority > existingEntry.Priority)
+                        {
+                            logger.LogDebug($"Removing lower priority entry and adding candidate pair to checklist for: {entry.RemoteCandidate}");
+                            _checklist.Remove(existingEntry);
+                            _checklist.Add(entry);
+                        }
+                        else
+                        {
+                            logger.LogDebug($"Existing checklist entry has higher priority, NOT adding entry for: {entry.RemoteCandidate}");
+                        }
                     }
                 }
-            }
-            else
-            {
-                // No existing entry.
-                logger.LogDebug($"Adding new candidate pair to checklist for: {entry.LocalCandidate.ToShortString()}->{entry.RemoteCandidate.ToShortString()}");
-                _checklist.Add(entry);
+                else
+                {
+                    // No existing entry.
+                    logger.LogDebug($"Adding new candidate pair to checklist for: {entry.LocalCandidate.ToShortString()}->{entry.RemoteCandidate.ToShortString()}");
+                    _checklist.Add(entry);
+                }
             }
         }
 
@@ -1582,16 +1609,16 @@ namespace SIPSorcery.Net
                 // Until that happens there is no work to do.
                 if (IceConnectionState == RTCIceConnectionState.checking)
                 {
-                    if (_checklist.Count > 0)
+                    lock (_checklistLock)
                     {
-                        if (RemoteIceUser == null || RemoteIcePassword == null)
+                        if (_checklist.Count > 0)
                         {
-                            logger.LogWarning("ICE RTP channel checklist processing cannot occur as either the remote ICE user or password are not set.");
-                            IceConnectionState = RTCIceConnectionState.failed;
-                        }
-                        else
-                        {
-                            lock (_checklist)
+                            if (RemoteIceUser == null || RemoteIcePassword == null)
+                            {
+                                logger.LogWarning("ICE RTP channel checklist processing cannot occur as either the remote ICE user or password are not set.");
+                                IceConnectionState = RTCIceConnectionState.failed;
+                            }
+                            else
                             {
                                 // The checklist gets sorted into priority order whenever a remote candidate and its corresponding candidate pairs
                                 // are added. At this point it can be relied upon that the checklist is correctly sorted by candidate pair priority.
@@ -1670,19 +1697,19 @@ namespace SIPSorcery.Net
                                 }
                             }
                         }
-                    }
-                    else if (_checklistStartedAt != DateTime.MinValue &&
-                        DateTime.Now.Subtract(_checklistStartedAt).TotalSeconds > FAILED_TIMEOUT_PERIOD)
-                    {
-                        // No checklist entries were made available before the failed timeout.
-                        logger.LogWarning($"ICE RTP channel failed to connect as no checklist entries became available within {DateTime.Now.Subtract(_checklistStartedAt).TotalSeconds:0.##}s.");
+                        else if (_checklistStartedAt != DateTime.MinValue &&
+                            DateTime.Now.Subtract(_checklistStartedAt).TotalSeconds > FAILED_TIMEOUT_PERIOD)
+                        {
+                            // No checklist entries were made available before the failed timeout.
+                            logger.LogWarning($"ICE RTP channel failed to connect as no checklist entries became available within {DateTime.Now.Subtract(_checklistStartedAt).TotalSeconds:0.##}s.");
 
-                        _checklistState = ChecklistState.Failed;
-                        //IceConnectionState = RTCIceConnectionState.disconnected;
-                        // No point going to and ICE disconnected state as there was never a connection and therefore
-                        // nothing to monitor for a re-connection.
-                        IceConnectionState = RTCIceConnectionState.failed;
-                        OnIceConnectionStateChange?.Invoke(IceConnectionState);
+                            _checklistState = ChecklistState.Failed;
+                            //IceConnectionState = RTCIceConnectionState.disconnected;
+                            // No point going to and ICE disconnected state as there was never a connection and therefore
+                            // nothing to monitor for a re-connection.
+                            IceConnectionState = RTCIceConnectionState.failed;
+                            OnIceConnectionStateChange?.Invoke(IceConnectionState);
+                        }
                     }
                 }
             }
@@ -1700,7 +1727,7 @@ namespace SIPSorcery.Net
                 _connectedAt = DateTime.Now;
                 int duration = (int)_connectedAt.Subtract(_startedGatheringAt).TotalMilliseconds;
 
-                logger.LogInformation($"ICE RTP channel connected after {duration:0.##}ms {entry.LocalCandidate.ToShortString()}->{entry.RemoteCandidate.ToShortString()}.");
+                logger.LogDebug($"ICE RTP channel connected after {duration:0.##}ms {entry.LocalCandidate.ToShortString()}->{entry.RemoteCandidate.ToShortString()}.");
 
                 entry.Nominated = true;
                 entry.LastConnectedResponseAt = DateTime.Now;
@@ -1713,7 +1740,7 @@ namespace SIPSorcery.Net
             else
             {
                 // The nominated entry has been changed.
-                logger.LogInformation($"ICE RTP channel remote nominated candidate changed from {NominatedEntry.RemoteCandidate.ToShortString()} to {entry.RemoteCandidate.ToShortString()}.");
+                logger.LogDebug($"ICE RTP channel remote nominated candidate changed from {NominatedEntry.RemoteCandidate.ToShortString()} to {entry.RemoteCandidate.ToShortString()}.");
 
                 entry.Nominated = true;
                 entry.LastConnectedResponseAt = DateTime.Now;
@@ -1994,50 +2021,53 @@ namespace SIPSorcery.Net
         {
             if (IsController && (NominatedEntry == null || !NominatedEntry.Nominated || NominatedEntry.State != ChecklistEntryState.Succeeded))
             {
-                _checklist.Sort();
-
-                var findBetterOptionOrWait = possibleMatchingCheckEntry == null; //|| possibleMatchingCheckEntry.RemoteCandidate.type == RTCIceCandidateType.relay;
-                var nominatedCandidate = _checklist.Find(
-                        x => x.Nominated
-                        && x.State == ChecklistEntryState.Succeeded
-                        && (x.LastCheckSentAt == DateTime.MinValue ||
-                            DateTime.Now.Subtract(x.LastCheckSentAt).TotalSeconds <= FAILED_TIMEOUT_PERIOD));
-
-                //We already have a good candidate, discard our succeded candidate
-                if (nominatedCandidate != null /*&& nominatedCandidate.RemoteCandidate.type != RTCIceCandidateType.relay*/)
+                lock (_checklistLock)
                 {
-                    possibleMatchingCheckEntry = null;
-                    findBetterOptionOrWait = false;
-                }
+                    _checklist.Sort();
 
-                if (findBetterOptionOrWait)
-                {
-                    //Search for another succeded non-nominated entries with better priority over our current object.
-                    var betterOptionEntry = _checklist.Find(x =>
-                       x.State == ChecklistEntryState.Succeeded &&
-                        !x.Nominated &&
-                        (possibleMatchingCheckEntry == null ||
-                         (x.Priority > possibleMatchingCheckEntry.Priority /*&& x.RemoteCandidate.type != RTCIceCandidateType.relay*/) ||
-                         possibleMatchingCheckEntry.State != ChecklistEntryState.Succeeded));
+                    var findBetterOptionOrWait = possibleMatchingCheckEntry == null; //|| possibleMatchingCheckEntry.RemoteCandidate.type == RTCIceCandidateType.relay;
+                    var nominatedCandidate = _checklist.Find(
+                            x => x.Nominated
+                            && x.State == ChecklistEntryState.Succeeded
+                            && (x.LastCheckSentAt == DateTime.MinValue ||
+                                DateTime.Now.Subtract(x.LastCheckSentAt).TotalSeconds <= FAILED_TIMEOUT_PERIOD));
 
-                    if (betterOptionEntry != null)
+                    //We already have a good candidate, discard our succeded candidate
+                    if (nominatedCandidate != null /*&& nominatedCandidate.RemoteCandidate.type != RTCIceCandidateType.relay*/)
                     {
-                        possibleMatchingCheckEntry = betterOptionEntry;
-                        findBetterOptionOrWait = false; //possibleMatchingCheckEntry.RemoteCandidate.type == RTCIceCandidateType.relay;
+                        possibleMatchingCheckEntry = null;
+                        findBetterOptionOrWait = false;
                     }
 
-                    //if we still need to find a better option, we will search for matching entries with high priority that still processing
                     if (findBetterOptionOrWait)
                     {
-                        var waitOptionEntry = _checklist.Find(x =>
-                            (x.State == ChecklistEntryState.InProgress || x.State == ChecklistEntryState.Waiting) &&
-                             (possibleMatchingCheckEntry == null ||
-                              (x.Priority > possibleMatchingCheckEntry.Priority /*&& x.RemoteCandidate.type != RTCIceCandidateType.relay*/) ||
-                              possibleMatchingCheckEntry.State != ChecklistEntryState.Succeeded));
+                        //Search for another succeded non-nominated entries with better priority over our current object.
+                        var betterOptionEntry = _checklist.Find(x =>
+                           x.State == ChecklistEntryState.Succeeded &&
+                            !x.Nominated &&
+                            (possibleMatchingCheckEntry == null ||
+                             (x.Priority > possibleMatchingCheckEntry.Priority /*&& x.RemoteCandidate.type != RTCIceCandidateType.relay*/) ||
+                             possibleMatchingCheckEntry.State != ChecklistEntryState.Succeeded));
 
-                        if (waitOptionEntry != null)
+                        if (betterOptionEntry != null)
                         {
-                            possibleMatchingCheckEntry = null;
+                            possibleMatchingCheckEntry = betterOptionEntry;
+                            findBetterOptionOrWait = false; //possibleMatchingCheckEntry.RemoteCandidate.type == RTCIceCandidateType.relay;
+                        }
+
+                        //if we still need to find a better option, we will search for matching entries with high priority that still processing
+                        if (findBetterOptionOrWait)
+                        {
+                            var waitOptionEntry = _checklist.Find(x =>
+                                (x.State == ChecklistEntryState.InProgress || x.State == ChecklistEntryState.Waiting) &&
+                                 (possibleMatchingCheckEntry == null ||
+                                  (x.Priority > possibleMatchingCheckEntry.Priority /*&& x.RemoteCandidate.type != RTCIceCandidateType.relay*/) ||
+                                  possibleMatchingCheckEntry.State != ChecklistEntryState.Succeeded));
+
+                            if (waitOptionEntry != null)
+                            {
+                                possibleMatchingCheckEntry = null;
+                            }
                         }
                     }
                 }
@@ -2113,7 +2143,7 @@ namespace SIPSorcery.Net
                     ChecklistEntry matchingChecklistEntry = null;
 
                     // Find the checklist entry for this remote candidate and update its status.
-                    lock (_checklist)
+                    lock (_checklistLock)
                     {
                         // The matching checklist entry is chosen as:
                         // - The entry that has a remote candidate with an end point that matches the endpoint this STUN request came from,
@@ -2216,7 +2246,7 @@ namespace SIPSorcery.Net
             string txID = Encoding.ASCII.GetString(transactionID);
             ChecklistEntry matchingChecklistEntry = null;
 
-            lock (_checklist)
+            lock (_checklistLock)
             {
                 matchingChecklistEntry = _checklist.Where(x => x.IsTransactionIDMatch(txID)).FirstOrDefault();
             }
@@ -2557,13 +2587,14 @@ namespace SIPSorcery.Net
 
             // See https://tools.ietf.org/html/rfc5389#section-15.4
             string key = $"{username}:{Encoding.UTF8.GetString(realm)}:{password}";
-            // TODO: When .NET Standard and Framework support are deprecated this pragma can be removed.
-#pragma warning disable SYSLIB0021
-            MD5 md5 = new MD5CryptoServiceProvider();
-            byte[] md5Hash = md5.ComputeHash(Encoding.UTF8.GetBytes(key));
-#pragma warning restore SYSLIB0021
+            var buffer = Encoding.UTF8.GetBytes(key);
+            var md5Digest = new MD5Digest();
+            var hash = new byte[md5Digest.GetDigestSize()];
 
-            return stunRequest.ToByteBuffer(md5Hash, true);
+            md5Digest.BlockUpdate(buffer, 0, buffer.Length);
+            md5Digest.DoFinal(hash, 0);
+
+            return stunRequest.ToByteBuffer(hash, true);
         }
 
         /// <summary>
@@ -2652,7 +2683,7 @@ namespace SIPSorcery.Net
             if (MdnsResolve != null)
             {
                 var address = await MdnsResolve(candidate.address).ConfigureAwait(false);
-                return address != null ? new IPAddress[] { address } : null;
+                return address != null ? new IPAddress[] { address } : Array.Empty<IPAddress>();
             }
 
 

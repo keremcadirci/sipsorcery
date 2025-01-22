@@ -1,4 +1,4 @@
-//-----------------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------------
 // Filename: SIPURI.cs
 //
 // Description: SIP URI.
@@ -127,10 +127,11 @@ namespace SIPSorcery.SIP
                 string canonicalAddress = Scheme + ":";
                 canonicalAddress += !String.IsNullOrEmpty(User) ? User + "@" : null;
 
-                // First expression is for IPv6 addresses with a port.
+                // First expression is for IPv6 addresses with a port and tel: URIs.
                 // Second expression is for IPv4 addresses and hostnames with a port.
                 if (Host.Contains("]:") ||
-                    (Host.IndexOf(':') != -1 && Host.IndexOf(':') == Host.LastIndexOf(':')))
+                    (Host.IndexOf(':') != -1 && Host.IndexOf(':') == Host.LastIndexOf(':')) ||
+                    Scheme == SIPSchemesEnum.tel)
                 {
                     canonicalAddress += Host;
                 }
@@ -551,7 +552,7 @@ namespace SIPSorcery.SIP
         /// <returns>A string representing the address of record for the URI.</returns>
         public string ToAOR()
         {
-            return User + USER_HOST_SEPARATOR + Host;
+            return Scheme == SIPSchemesEnum.tel ? Host : User + USER_HOST_SEPARATOR + Host;
         }
 
         public SIPEndPoint ToSIPEndPoint()
@@ -604,7 +605,7 @@ namespace SIPSorcery.SIP
 
         public static bool operator ==(SIPURI uri1, SIPURI uri2)
         {
-            if (uri1 is null && uri2 is null)
+            if (object.ReferenceEquals(uri1, uri2))
             {
                 return true;
             }

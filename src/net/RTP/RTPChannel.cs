@@ -42,10 +42,12 @@ namespace SIPSorcery.Net
     public class UdpReceiver
     {
         /// <summary>
-        /// MTU is 1452 bytes so this should be heaps.
-        /// TODO: What about fragmented UDP packets that are put back together by the OS?
+        /// MTU is 1452 bytes so this should be heaps [AC 03 Nov 2024: turns out it's not when considering UDP fragmentation can
+        /// result in a max UDP payload of 65535 - 8 (header) = 65527 bytes].
+        /// An issue was reported with a real World WeBRTC implementation producing UDP packet sizes of 2144 byes #1045. Consequently
+        /// updated from 2048 to 3000.
         /// </summary>
-        protected const int RECEIVE_BUFFER_SIZE = 2048;
+        protected const int RECEIVE_BUFFER_SIZE = 3000;
 
         protected static ILogger logger = Log.Logger;
 
@@ -128,16 +130,17 @@ namespace SIPSorcery.Net
                 EndPoint recvEndPoint = m_addressFamily == AddressFamily.InterNetwork ? new IPEndPoint(IPAddress.Any, 0) : new IPEndPoint(IPAddress.IPv6Any, 0);
                 m_socket.BeginReceiveFrom(m_recvBuffer, 0, m_recvBuffer.Length, SocketFlags.None, ref recvEndPoint, EndReceiveFrom, null);
             }
-            // Thrown when socket is closed. Can be safely ignored.
-            // This exception can be thrown in response to an ICMP packet. The problem is the ICMP packet can be a false positive.
-            // For example if the remote RTP socket has not yet been opened the remote host could generate an ICMP packet for the 
-            // initial RTP packets. Experience has shown that it's not safe to close an RTP connection based solely on ICMP packets.
             catch (ObjectDisposedException) 
             {
+                // Thrown when socket is closed. Can be safely ignored.
                 m_isRunningReceive = false;
             } 
             catch (SocketException sockExcp)
             {
+                // This exception can be thrown in response to an ICMP packet. The problem is the ICMP packet can be a false positive.
+                // For example if the remote RTP socket has not yet been opened the remote host could generate an ICMP packet for the 
+                // initial RTP packets. Experience has shown that it's not safe to close an RTP connection based solely on ICMP packets.
+
                 m_isRunningReceive = false;
                 logger.LogWarning($"Socket error {sockExcp.SocketErrorCode} in UdpReceiver.BeginReceiveFrom. {sockExcp.Message}");
                 //Close(sockExcp.Message);
@@ -404,7 +407,6 @@ namespace SIPSorcery.Net
             }
         }
 
-
         /// <summary>
         /// Starts the UDP receiver that listens for RTCP (control) packets.
         /// </summary>
@@ -552,7 +554,7 @@ namespace SIPSorcery.Net
                 // - the RTP connection may start sending before the remote socket starts listening,
                 // - an on hold, transfer, etc. operation can change the RTP end point which could result in socket errors from the old
                 //   or new socket during the transition.
-                logger.LogWarning(sockExcp, $"SocketException RTPChannel EndSendTo ({sockExcp.ErrorCode}). {sockExcp.Message}");
+                logger.LogWarning($"SocketException RTPChannel EndSendTo ({sockExcp.ErrorCode}). {sockExcp.Message}");
             }
             catch (ObjectDisposedException) // Thrown when socket is closed. Can be safely ignored.
             { }

@@ -17,33 +17,31 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using SIPSorcery.Net;
 using SIPSorcery.Sys;
 using SIPSorceryMedia.Abstractions;
 
-namespace SIPSorcery.net.RTP
+namespace SIPSorcery.Net
 {
     public class AudioStream : MediaStream
     {
         protected static ILogger logger = Log.Logger;
+        protected bool rtpEventInProgress = false;
 
-        protected Boolean rtpEventInProgress = false;
+        private bool sendingFormatFound = false;
 
-        #region EVENTS
+        /// <summary>
+        /// The audio format negotiated fir the audio stream by the SDP offer/answer exchange.
+        /// </summary>
+        public SDPAudioVideoMediaFormat NegotiatedFormat { get; private set; }
 
         /// <summary>
         /// Gets fired when the remote SDP is received and the set of common audio formats is set.
         /// </summary>
         public event Action<int, List<AudioFormat>> OnAudioFormatsNegotiatedByIndex;
-
-        #endregion EVENTS
-
-        #region PROPERTIES
 
         /// <summary>
         /// Indicates whether this session is using audio.
@@ -52,14 +50,10 @@ namespace SIPSorcery.net.RTP
         {
             get
             {
-                return LocalTrack != null && LocalTrack.StreamStatus != MediaStreamStatusEnum.Inactive
-                  && RemoteTrack != null && RemoteTrack.StreamStatus != MediaStreamStatusEnum.Inactive;
+                return (LocalTrack != null && LocalTrack.StreamStatus != MediaStreamStatusEnum.Inactive)
+                  || (RemoteTrack != null && RemoteTrack.StreamStatus != MediaStreamStatusEnum.Inactive);
             }
         }
-
-        #endregion PROPERTIES
-
-        #region SEND PACKET
 
         /// <summary>
         /// Sends an audio sample to the remote peer.
@@ -69,8 +63,12 @@ namespace SIPSorcery.net.RTP
         /// <param name="sample">The audio sample to set as the RTP packet payload.</param>
         public void SendAudio(uint durationRtpUnits, byte[] sample)
         {
-            var audioFormat = GetSendingFormat();
-            SendAudioFrame(durationRtpUnits, audioFormat.ID, sample);
+            if (!sendingFormatFound)
+            {
+                NegotiatedFormat = GetSendingFormat();
+                sendingFormatFound = true;
+            }
+            SendAudioFrame(durationRtpUnits, NegotiatedFormat.ID, sample);
         }
 
         /// <summary>
@@ -86,7 +84,7 @@ namespace SIPSorcery.net.RTP
             {
                 if (rtpEventInProgress)
                 {
-                    logger.LogWarning($"A RTPEvent is in progress.");
+                    //logger.LogWarning($"{nameof(SendAudioFrame)} an RTPEvent is in progress.");
                     return;
                 }
 
@@ -100,15 +98,21 @@ namespace SIPSorcery.net.RTP
                     // paylaod.
                     // See https://github.com/sipsorcery/sipsorcery/issues/394.
 
-                    uint payloadDuration = 0;
+                    int maxPayload = RTPSession.RTP_MAX_PAYLOAD;
+                    int totalPackets = (buffer.Length + maxPayload - 1) / maxPayload;
 
-                    for (int index = 0; index * RTPSession.RTP_MAX_PAYLOAD < buffer.Length; index++)
+                    uint totalIncrement = 0;
+                    uint startTimestamp = LocalTrack.Timestamp; // Keep track of where we started.
+
+                    for (int index = 0; index < totalPackets; index++)
                     {
-                        int offset = (index == 0) ? 0 : (index * RTPSession.RTP_MAX_PAYLOAD);
-                        int payloadLength = (offset + RTPSession.RTP_MAX_PAYLOAD < buffer.Length) ? RTPSession.RTP_MAX_PAYLOAD : buffer.Length - offset;
-                        LocalTrack.Timestamp += payloadDuration;
-                        byte[] payload = new byte[payloadLength];
+                        int offset = index * maxPayload;
+                        int payloadLength = Math.Min(maxPayload, buffer.Length - offset);
 
+                        double fraction = (double)payloadLength / buffer.Length;
+                        uint packetDuration = (uint)Math.Round(fraction * duration);
+
+                        byte[] payload = new byte[payloadLength];
                         Buffer.BlockCopy(buffer, offset, payload, 0, payloadLength);
 
                         // RFC3551 specifies that for audio the marker bit should always be 0 except for when returning
@@ -116,13 +120,21 @@ namespace SIPSorcery.net.RTP
                         // in a frame.
                         int markerBit = 0;
 
+                        // Send this packet at the current LocalTrack.Timestamp
                         SendRtpRaw(payload, LocalTrack.Timestamp, markerBit, payloadTypeID, true);
-                        //logger.LogDebug($"send audio { audioRtpChannel.RTPLocalEndPoint}->{AudioDestinationEndPoint}.");
 
-                        payloadDuration = (uint)(((decimal)payloadLength / buffer.Length) * duration); // Get the percentage duration of this payload.
+                        // After sending, increment the timestamp by this packet's portion.
+                        // This ensures the timestamp increments for the next packet, including the first one.
+                        LocalTrack.Timestamp += packetDuration;
+                        totalIncrement += packetDuration;
                     }
 
-                    LocalTrack.Timestamp += duration;
+                    // After all packets are sent, correct if we haven't incremented exactly by `duration`.
+                    if (totalIncrement != duration)
+                    {
+                        // Add or subtract the difference so total increment equals duration.
+                        LocalTrack.Timestamp += (duration - totalIncrement);
+                    }
                 }
                 catch (SocketException sockExcp)
                 {
@@ -147,7 +159,7 @@ namespace SIPSorcery.net.RTP
             {
                 if (rtpEventInProgress)
                 {
-                    logger.LogWarning($"A RTPEvent is in progress.");
+                    logger.LogWarning($"{nameof(SendDtmfEvent)} an RTPEvent is already in progress.");
                     return;
                 }
 
@@ -224,11 +236,9 @@ namespace SIPSorcery.net.RTP
         /// be used to cancel the send.</param>
         public virtual Task SendDtmf(byte key, CancellationToken ct)
         {
-            var dtmfEvent = new RTPEvent(key, false, RTPEvent.DEFAULT_VOLUME, RTPSession.DTMF_EVENT_DURATION, RTPSession.DTMF_EVENT_PAYLOAD_ID);
+            var dtmfEvent = new RTPEvent(key, false, RTPEvent.DEFAULT_VOLUME, RTPSession.DTMF_EVENT_DURATION, NegotiatedRtpEventPayloadID);
             return SendDtmfEvent(dtmfEvent, ct);
         }
-
-        #endregion SEND PACKET
 
         public void CheckAudioFormatsNegotiation()
         {

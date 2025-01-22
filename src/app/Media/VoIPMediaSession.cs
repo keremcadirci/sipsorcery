@@ -69,24 +69,23 @@ namespace SIPSorcery.Media
         /// Default constructor which creates the simplest possible send only audio session. It does not
         /// wire up any devices or video processing.
         /// </summary>
-        public VoIPMediaSession(string musicFilePath = null, Func<AudioFormat, bool> restrictFormats = null) : base(false, false, false)
+        public VoIPMediaSession(Func<AudioFormat, bool> restrictFormats = null, bool noDtmfSupport = false) : base(false, false, false)
         {
             _audioExtrasSource = new AudioExtrasSource();
             _audioExtrasSource.OnAudioSourceEncodedSample += SendAudio;
             _audioExtrasSource.SetSource(AudioSourcesEnum.Music);
 
-            if(restrictFormats != null)
+            if (restrictFormats != null)
             {
                 _audioExtrasSource.RestrictFormats(restrictFormats);
             }
 
+            var audioTrack = new MediaStreamTrack(_audioExtrasSource.GetAudioSourceFormats());
+            audioTrack.NoDtmfSupport = noDtmfSupport;
+            base.addTrack(audioTrack);
+            base.OnAudioFormatsNegotiated += AudioFormatsNegotiated;
 
             Media = new MediaEndPoints { AudioSource = _audioExtrasSource };
-
-            var audioTrack = new MediaStreamTrack(_audioExtrasSource.GetAudioSourceFormats());
-            base.addTrack(audioTrack);
-            Media.AudioSource.OnAudioSourceEncodedSample += SendAudio;
-            base.OnAudioFormatsNegotiated += AudioFormatsNegotiated;
         }
 
         public VoIPMediaSession(MediaEndPoints mediaEndPoint, VideoTestPatternSource testPatternSource)
@@ -99,8 +98,7 @@ namespace SIPSorcery.Media
             int bindPort = 0,
             VideoTestPatternSource testPatternSource = null)
             : this(new VoIPMediaSessionConfig { MediaEndPoint = mediaEndPoint, BindAddress = bindAddress, BindPort = bindPort, TestPatternSource = testPatternSource })
-        {
-        }
+        { }
 
         public VoIPMediaSession(VoIPMediaSessionConfig config)
             : base(new RtpSessionConfig
@@ -162,7 +160,6 @@ namespace SIPSorcery.Media
 
             base.OnAudioFormatsNegotiated += AudioFormatsNegotiated;
             base.OnVideoFormatsNegotiated += VideoFormatsNegotiated;
-            
         }
 
         private async void VideoSource_OnVideoSourceError(string errorMessage)
@@ -180,18 +177,31 @@ namespace SIPSorcery.Media
 
         private void AudioFormatsNegotiated(List<AudioFormat> audoFormats)
         {
+            // IMPTORTANT NOTE: The audio sink format cannot be set here as it is not known until the first RTP packet
+            // is received from the remote party. All we know at this stage is which audio formats are supported but NOT
+            // which one the remote party has chosen to use. Generally it seems the sending and reciving formats should be the same but
+            // the standard is very fuzzy in that area. See https://datatracker.ietf.org/doc/html/rfc3264#section-7 and note the "SHOULD" in the text.
+
             var audioFormat = audoFormats.First();
-            logger.LogDebug($"Setting audio sink and source format to {audioFormat.FormatID}:{audioFormat.Codec} {audioFormat.ClockRate} (RTP clock rate {audioFormat.RtpClockRate}).");
-            Media.AudioSink?.SetAudioSinkFormat(audioFormat);
+            logger.LogDebug($"Setting audio source format to {audioFormat.FormatID}:{audioFormat.Codec} {audioFormat.ClockRate} (RTP clock rate {audioFormat.RtpClockRate}).");
             Media.AudioSource?.SetAudioSourceFormat(audioFormat);
             _audioExtrasSource.SetAudioSourceFormat(audioFormat);
+
+            if(AudioStream != null && AudioStream.LocalTrack.NoDtmfSupport == false)
+            {
+                logger.LogDebug($"Audio track negotiated DTMF payload ID {AudioStream.NegotiatedRtpEventPayloadID}.");
+            }
         }
 
         private void VideoFormatsNegotiated(List<VideoFormat> videoFormats)
         {
+            // IMPTORTANT NOTE: The video sink format cannot be set here as it is not known until the first RTP packet
+            // is received from the remote party. All we know at this stage is which audio formats are supported but NOT
+            // which one the remote party has chosen to use. Generally it seems the sending and reciving formats should be the same but
+            // the standard is very fuzzy in that area. See https://datatracker.ietf.org/doc/html/rfc3264#section-7 and note the "SHOULD" in the text.
+
             var videoFormat = videoFormats.First();
             logger.LogDebug($"Setting video sink and source format to {videoFormat.FormatID}:{videoFormat.Codec}.");
-            Media.VideoSink?.SetVideoSinkFormat(videoFormat);
             Media.VideoSource?.SetVideoSourceFormat(videoFormat);
             _videoTestPatternSource?.SetVideoSourceFormat(videoFormat);
         }
@@ -287,6 +297,8 @@ namespace SIPSorcery.Media
 
             if (mediaType == SDPMediaTypesEnum.audio && Media.AudioSink != null)
             {
+                logger.LogTrace($"{nameof(RtpMediaPacketReceived)} audio RTP packet received from {remoteEndPoint} ssrc {hdr.SyncSource} seqnum {hdr.SequenceNumber} timestamp {hdr.Timestamp} payload type {hdr.PayloadType}.");
+
                 Media.AudioSink.GotAudioRtp(remoteEndPoint, hdr.SyncSource, hdr.SequenceNumber, hdr.Timestamp, hdr.PayloadType, marker, rtpPacket.Payload);
             }
         }
