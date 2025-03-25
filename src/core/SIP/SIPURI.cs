@@ -600,7 +600,11 @@ namespace SIPSorcery.SIP
 
         public override bool Equals(object obj)
         {
-            return AreEqual(this, (SIPURI)obj);
+             if (obj is SIPURI other)
+             {
+                 return AreEqual(this, other);
+             }
+             return false;        
         }
 
         public static bool operator ==(SIPURI uri1, SIPURI uri2)
